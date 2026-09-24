@@ -1,4 +1,4 @@
-# Episode Production Agent V0.1
+# Episode Production Agent
 
 The V0.1 brain skeleton compiles strict structured Markdown into an immutable EpisodeSpec snapshot and a separate validation report. It contains no provider integrations, and keeps story intent separate from runtime state and generated files.
 
@@ -39,3 +39,13 @@ Timing: min: 3.5 target: 4.2 max: 5.0
 ```
 
 V0.1 deliberately rejects free-form prose and does not call media, AI, or publishing services.
+
+## V0.2 Audio
+
+V0.2 consumes a validated `episode.json` without mutating it. It writes audio assets, an `audio_manifest.json`, and a `realized_timeline.json` whose durations are measured from the generated files.
+
+```bash
+npm run audio -- output/episode.json output/EP_001/audio/v1 --voice-registry examples/voice_registry.json
+```
+
+The initial local provider uses macOS `say` and `afinfo`, producing AIFF files. The voice registry assigns the narrator and optional character voices. A dialogue speaker must be present in the shot's declared character list. Audio artifacts are protected from overwrite unless `--overwrite` is explicitly passed.
