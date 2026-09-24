@@ -1,20 +1,22 @@
 # Episode Production Agent V0.1
 
-The V0.1 brain skeleton compiles strict structured Markdown into an immutable EpisodeSpec and a separate validation report. It is deterministic, contains no provider integrations, and keeps story intent separate from runtime state and generated files.
+The V0.1 brain skeleton compiles strict structured Markdown into an immutable EpisodeSpec snapshot and a separate validation report. It contains no provider integrations, and keeps story intent separate from runtime state and generated files.
 
 ## Run
 
 ```bash
-npm run parse -- examples/episode_001.md output
+npm run parse -- examples/episode_001.md output/EP_001/v1 --episode-id EP_001
 ```
 
 Optional registry validation:
 
 ```bash
-npm run parse -- examples/episode_001.md output --series-bible examples/series_bible.json --series-id SERIES_AWAKENING
+npm run parse -- examples/episode_001.md output/EP_001/v1 --series-registry examples/series_registry.json --series-id SERIES_AWAKENING --episode-id EP_001
 ```
 
-The command writes `episode.json` and `validation.json`. It exits with code `1` when blocking validation errors are present.
+The command writes `episode.json` and `validation.json`. It exits with code `1` when blocking validation errors are present and `2` for CLI or file errors. Existing artifacts are protected from accidental overwrite; create a new versioned output directory for a revised specification or explicitly pass `--overwrite`.
+
+`specVersion` starts at `1`; use `--spec-version 2 --parent-spec-version 1` for a revised immutable snapshot. V0.1 scene and shot IDs are structural (`SC_001`, `SH_001_001`), so prose changes do not change them. Reordering source sections is a separate future identity-resolution concern.
 
 ## Supported Markdown
 
