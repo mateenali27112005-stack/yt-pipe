@@ -65,3 +65,13 @@ npm run visual-regenerate -- output/EP_001/visual/v1/asset_manifest.json VAS_SH_
 ```
 
 Regeneration appends the next immutable asset version and moves the active pointer while retaining the prior version. V0.3 has no image provider, cloud API, GPU inference, image-to-video, or rendering.
+
+## V0.4 Image Generation
+
+V0.4 consumes the exact V0.3 `ShotVisualSpec` and `AssetManifest` contracts. The OpenAI Images provider creates a new immutable `GENERATED` asset version with its PNG path, byte length, model, prompt hash, and optional revised prompt. It never alters a previous planned or generated version.
+
+```bash
+OPENAI_API_KEY=... npm run visual-generate -- output/EP_001/visual/v1/shot_visual_spec.json output/EP_001/visual/v1/asset_manifest.json VAS_SH_001_001 --overwrite-manifest
+```
+
+The adapter uses the OpenAI Images API with `gpt-image-2.5-flare`; the provider is replaceable behind `ImageProvider`. It fails before making a request when `OPENAI_API_KEY` is unavailable, and it refuses visual-spec and manifest provenance mismatches.
