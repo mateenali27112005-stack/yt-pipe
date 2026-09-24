@@ -84,3 +84,45 @@ export interface ValidationReport {
   findings: Finding[];
   provenance: { validator: "episode-production-agent"; validatorVersion: "0.1.0" };
 }
+
+export interface AudioVoiceRegistry {
+  narrator: string;
+  characters?: Record<string, string>;
+}
+
+export interface AudioAssetManifest {
+  schemaVersion: "0.1";
+  episodeId: string;
+  sourceSpecVersion: number;
+  generatedAt: string;
+  provider: "macos-say";
+  assets: Array<{
+    id: string;
+    segmentId: string;
+    shotId: string;
+    role: "narration" | "dialogue";
+    voice: string;
+    path: string;
+    format: "aiff";
+    durationSeconds: number;
+  }>;
+}
+
+export interface RealizedTimeline {
+  schemaVersion: "0.1";
+  episodeId: string;
+  sourceSpecVersion: number;
+  generatedAt: string;
+  totalDurationSeconds: number;
+  segments: Array<{
+    id: string;
+    shotId: string;
+    role: "narration" | "dialogue";
+    speaker?: string;
+    text: string;
+    startSeconds: number;
+    endSeconds: number;
+    durationSeconds: number;
+    audioAssetId: string;
+  }>;
+}
