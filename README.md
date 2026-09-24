@@ -49,3 +49,19 @@ npm run audio -- output/episode.json output/EP_001/audio/v1 --voice-registry exa
 ```
 
 The initial local provider uses macOS `say` and `afinfo`, producing AIFF files. The voice registry assigns the narrator and optional character voices. A dialogue speaker must be present in the shot's declared character list. Audio artifacts are protected from overwrite unless `--overwrite` is explicitly passed.
+
+## V0.3 Visual Contracts
+
+V0.3 does not generate images. It deterministically derives a `shot_visual_spec.json` for each shot from a validated EpisodeSpec and matching realized timeline, then creates an `asset_manifest.json` with one planned visual asset version per shot.
+
+```bash
+npm run visual-plan -- output/episode.json path/to/realized_timeline.json output/EP_001/visual/v1 --visual-profile examples/visual_profile.json
+```
+
+Each visual spec records character and location IDs, visual intent, framing, action, expression, lighting, mood, camera intent, style reference, realized timing, and a source hash. The asset manifest records a stable asset identity (`VAS_<shotId>`), a single active planned version, and all prior versions. Plan a regeneration without generating an image:
+
+```bash
+npm run visual-regenerate -- output/EP_001/visual/v1/asset_manifest.json VAS_SH_001_001 --overwrite
+```
+
+Regeneration appends the next immutable asset version and moves the active pointer while retaining the prior version. V0.3 has no image provider, cloud API, GPU inference, image-to-video, or rendering.
