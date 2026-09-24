@@ -4,8 +4,22 @@ import type { EntityRegistry, EpisodeSpec, Finding, ParsedEpisode, ValidationRep
 const id = (prefix: string, value: string) => `${prefix}_${createHash("sha256").update(normalize(value)).digest("hex").slice(0, 10).toUpperCase()}`;
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
 
-export function compileEpisode(parsed: ParsedEpisode, parserFindings: Finding[], seriesId: string, known?: EntityRegistry): { episode: EpisodeSpec; report: ValidationReport } {
+export interface CompileOptions {
+  episodeId?: string;
+  seriesId: string;
+  specVersion?: number;
+  parentSpecVersion?: number;
+  registry?: EntityRegistry;
+  generatedAt?: Date;
+}
+
+export function compileEpisode(parsed: ParsedEpisode, parserFindings: Finding[], options: CompileOptions): { episode: EpisodeSpec; report: ValidationReport } {
   const findings = [...parserFindings];
+  const { episodeId = "EP_001", seriesId, specVersion = 1, parentSpecVersion, registry: known, generatedAt = new Date() } = options;
+  if (!Number.isInteger(specVersion) || specVersion < 1) findings.push(error("INVALID_SPEC_VERSION", "Spec version must be a positive integer."));
+  if (parentSpecVersion !== undefined && (!Number.isInteger(parentSpecVersion) || parentSpecVersion < 1 || parentSpecVersion >= specVersion)) {
+    findings.push(error("INVALID_PARENT_SPEC_VERSION", "Parent spec version must be a positive integer lower than the current spec version."));
+  }
   const characters = new Map<string, { id: string; name: string }>();
   const locations = new Map<string, { id: string; name: string }>();
   const knownCharacters = new Set((known?.characters ?? []).map(normalize));
@@ -27,7 +41,7 @@ export function compileEpisode(parsed: ParsedEpisode, parserFindings: Finding[],
     if (!scene.purpose) findings.push(error("MISSING_SCENE_PURPOSE", "Every Scene needs a Purpose.", scene.line));
     if (scene.shots.length === 0) findings.push(error("MISSING_SHOT", "Every Scene needs at least one Shot.", scene.line));
     const location = registerLocation(scene.location ?? "unresolved-location", scene.line);
-    const stableSceneId = id("SC", `${scene.title}|${scene.location ?? ""}|${scene.purpose ?? ""}`);
+    const stableSceneId = `SC_${String(sceneIndex + 1).padStart(3, "0")}`;
     return {
       id: stableSceneId,
       order: sceneIndex + 1,
@@ -45,7 +59,7 @@ export function compileEpisode(parsed: ParsedEpisode, parserFindings: Finding[],
         }
         const characterIds = shot.characters.map(name => registerCharacter(name, shot.line).id);
         return {
-          id: id("SH", `${stableSceneId}|${shot.purpose ?? ""}|${shot.visual ?? ""}|${shot.narration ?? ""}|${shot.dialogue ?? ""}`),
+          id: `SH_${String(sceneIndex + 1).padStart(3, "0")}_${String(shotIndex + 1).padStart(3, "0")}`,
           order: shotIndex + 1,
           purpose: shot.purpose ?? "",
           characterIds,
@@ -61,13 +75,13 @@ export function compileEpisode(parsed: ParsedEpisode, parserFindings: Finding[],
   const warnings = findings.filter(f => f.severity === "warning").length;
   const info = findings.filter(f => f.severity === "info").length;
   const episode: EpisodeSpec = {
-    schemaVersion: "0.1", specVersion: "1", lifecycle: errors ? "DRAFT" : "VALIDATED",
-    episode: { id: id("EP", parsed.title ?? "unresolved-episode"), title: parsed.title ?? "", seriesId },
+    schemaVersion: "0.1", specVersion, ...(parentSpecVersion ? { parentSpecVersion } : {}), lifecycle: errors ? "DRAFT" : "VALIDATED",
+    episode: { id: episodeId, title: parsed.title ?? "", seriesId },
     registry: { characters: [...characters.values()].sort((a, b) => a.id.localeCompare(b.id)), locations: [...locations.values()].sort((a, b) => a.id.localeCompare(b.id)) },
     scenes,
     provenance: { parser: "episode-production-agent", parserVersion: "0.1.0" }
   };
-  return { episode, report: { schemaVersion: "0.1", status: errors ? "FAIL" : "APPROVABLE", generatedAt: new Date(0).toISOString(), summary: { errors, warnings, info }, findings, provenance: { validator: "episode-production-agent", validatorVersion: "0.1.0" } } };
+  return { episode, report: { schemaVersion: "0.1", status: errors ? "FAIL" : "APPROVABLE", generatedAt: generatedAt.toISOString(), summary: { errors, warnings, info }, findings, provenance: { validator: "episode-production-agent", validatorVersion: "0.1.0" } } };
 }
 
 function error(code: string, message: string, line?: number): Finding { return { code, severity: "error", message, line }; }

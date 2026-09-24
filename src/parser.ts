@@ -11,11 +11,13 @@ export function parseStructuredMarkdown(markdown: string): { episode: ParsedEpis
   let scene: ParsedScene | undefined;
   let shot: ParsedShot | undefined;
   let readingCharacters = false;
+  let interruptedCharacterList = false;
 
   markdown.replace(/\r\n/g, "\n").split("\n").forEach((raw, index) => {
     const line = index + 1;
     const text = raw.trim();
     if (!text) {
+      interruptedCharacterList = readingCharacters;
       readingCharacters = false;
       return;
     }
@@ -28,7 +30,7 @@ export function parseStructuredMarkdown(markdown: string): { episode: ParsedEpis
     }
     const sceneMatch = text.match(headingScene);
     if (sceneMatch) {
-      scene = { title: sceneMatch[1], shots: [], line };
+      scene = { title: sceneMatch[1], shots: [], line, seenFields: new Set() };
       episode.scenes.push(scene);
       shot = undefined;
       readingCharacters = false;
@@ -39,7 +41,7 @@ export function parseStructuredMarkdown(markdown: string): { episode: ParsedEpis
         findings.push(error("SHOT_OUTSIDE_SCENE", "A Shot must be inside a Scene.", line));
         return;
       }
-      shot = { characters: [], line };
+      shot = { characters: [], line, seenFields: new Set() };
       scene.shots.push(shot);
       readingCharacters = false;
       return;
@@ -48,9 +50,14 @@ export function parseStructuredMarkdown(markdown: string): { episode: ParsedEpis
       shot?.characters.push(text.replace(/^-\s+/, "").trim());
       return;
     }
+    if (interruptedCharacterList && /^-\s+/.test(text)) {
+      findings.push(error("CHARACTER_LIST_INTERRUPTED", "Character lists cannot contain blank lines.", line));
+      interruptedCharacterList = false;
+      return;
+    }
     if (text === "Characters:") {
       if (!shot) findings.push(error("CHARACTERS_OUTSIDE_SHOT", "Characters belongs to a Shot.", line));
-      else readingCharacters = true;
+      else if (markField(shot, "Characters", findings, line)) readingCharacters = true;
       return;
     }
     const fieldMatch = text.match(field);
@@ -75,19 +82,22 @@ function assignField(name: string, value: string, scene: ParsedScene | undefined
   }
   if (["Location", "Time"].includes(name)) {
     if (!scene || shot) findings.push(error("SCENE_FIELD_SCOPE", `${name} belongs before the first Shot in a Scene.`, line));
-    else if (name === "Location") scene.location = value;
-    else scene.time = value;
+    else if (markField(scene, name, findings, line)) {
+      if (name === "Location") scene.location = value;
+      else scene.time = value;
+    }
     return;
   }
   if (name === "Purpose" && !shot) {
     if (!scene) findings.push(error("PURPOSE_OUTSIDE_SCENE", "Purpose belongs to a Scene or Shot.", line));
-    else scene.purpose = value;
+    else if (markField(scene, name, findings, line)) scene.purpose = value;
     return;
   }
   if (!shot) {
     findings.push(error("SHOT_FIELD_SCOPE", `${name} belongs to a Shot.`, line));
     return;
   }
+  if (!markField(shot, name, findings, line)) return;
   if (name === "Purpose") shot.purpose = value;
   else if (name === "Narration") shot.narration = value;
   else if (name === "Dialogue") shot.dialogue = value;
@@ -101,7 +111,21 @@ function parseTiming(value: string, findings: Finding[], line: number): Timing |
     findings.push(error("INVALID_TIMING_FORMAT", "Timing must be 'min: 3.5 target: 4.2 max: 5.0'.", line));
     return undefined;
   }
-  return { min: Number(match[1]), target: Number(match[2]), max: Number(match[3]) };
+  const timing = { min: Number(match[1]), target: Number(match[2]), max: Number(match[3]) };
+  if (!Object.values(timing).every(Number.isFinite)) {
+    findings.push(error("INVALID_TIMING_VALUE", "Timing values must be finite numbers.", line));
+    return undefined;
+  }
+  return timing;
+}
+
+function markField(owner: ParsedScene | ParsedShot, name: string, findings: Finding[], line: number): boolean {
+  if (owner.seenFields.has(name)) {
+    findings.push(error("DUPLICATE_FIELD", `${name} may appear only once in this section.`, line));
+    return false;
+  }
+  owner.seenFields.add(name);
+  return true;
 }
 
 function error(code: string, message: string, line?: number): Finding {

@@ -22,6 +22,7 @@ export interface ParsedShot {
   visual?: string;
   timing?: Timing;
   line: number;
+  seenFields: Set<string>;
 }
 
 export interface ParsedScene {
@@ -31,6 +32,7 @@ export interface ParsedScene {
   purpose?: string;
   shots: ParsedShot[];
   line: number;
+  seenFields: Set<string>;
 }
 
 export interface ParsedEpisode {
@@ -45,7 +47,8 @@ export interface EntityRegistry {
 
 export interface EpisodeSpec {
   schemaVersion: "0.1";
-  specVersion: "1";
+  specVersion: number;
+  parentSpecVersion?: number;
   lifecycle: "DRAFT" | "VALIDATED" | "PENDING_APPROVAL";
   episode: { id: string; title: string; seriesId: string };
   registry: {

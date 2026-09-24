@@ -1,9 +1,9 @@
 {
   "schemaVersion": "0.1",
-  "specVersion": "1",
+  "specVersion": 1,
   "lifecycle": "VALIDATED",
   "episode": {
-    "id": "EP_EC28E6094C",
+    "id": "EP_001",
     "title": "The Awakening",
     "seriesId": "SERIES_AWAKENING"
   },
@@ -23,7 +23,7 @@
   },
   "scenes": [
     {
-      "id": "SC_E0AB217AFC",
+      "id": "SC_001",
       "order": 1,
       "title": "The Ruined Temple",
       "location": {
@@ -34,7 +34,7 @@
       "purpose": "Kael discovers the forbidden symbol.",
       "shots": [
         {
-          "id": "SH_488F9F1A67",
+          "id": "SH_001_001",
           "order": 1,
           "purpose": "Reveal the forbidden symbol.",
           "characterIds": [
