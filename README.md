@@ -83,3 +83,19 @@ OPENAI_API_KEY=... npm run visual-generate -- output/EP_001/visual/v1/shot_visua
 ```
 
 The CLI requires explicit provider selection (`fake` or `openai`). The adapter uses the OpenAI Images API with `gpt-image-2.5-flare`; the provider is replaceable behind `ImageProvider`. It fails before making a request when `OPENAI_API_KEY` is unavailable, refuses visual-spec and manifest provenance mismatches, and removes a newly generated PNG if manifest publication fails.
+
+## V0.5 Series Bible and Visual Continuity
+
+V0.5 adds a versioned `SeriesBible` with canonical characters, locations, visual styles, and optional reference assets. A V0.5 visual plan records a deterministic continuity snapshot for every shot and the source Bible version. The manifest preserves that provenance transitively through its source visual-spec version.
+
+```bash
+npm run visual-plan -- output/EP_001/v1/episode.json output/EP_001/audio/v1/realized_timeline.json output/EP_001/visual/v1 --visual-profile examples/visual_profile.json --series-bible examples/series_bible.json --visual-spec-version 1
+```
+
+When generating a continuity-enriched visual asset, supply the same Bible revision used for planning. The engine rejects a missing, stale, or changed Bible before calling the provider:
+
+```bash
+npm run visual-generate -- output/EP_001/visual/v1/shot_visual_spec.json output/EP_001/visual/v1/asset_manifest.json VAS_SH_001_001 --provider fake --series-bible examples/series_bible.json --overwrite-manifest
+```
+
+Reference assets are versioned records with an optional active pointer. V0.5 passes active references to the provider boundary as resolved metadata; it does not yet add image-to-image generation, animation, rendering, or publishing.

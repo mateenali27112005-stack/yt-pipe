@@ -1,19 +1,26 @@
 import { createHash } from "node:crypto";
-import type { AssetManifest, EpisodeSpec, RealizedTimeline, ShotVisualSpec, VisualProfile } from "./types.ts";
+import { assertSeriesBible, assertSeriesBibleMatchesEpisode, resolveShotVisualContext } from "./series-bible.ts";
+import type { AssetManifest, EpisodeSpec, RealizedTimeline, SeriesBible, ShotVisualSpec, VisualProfile } from "./types.ts";
 
 export interface VisualPlanOptions {
   profile: VisualProfile;
+  seriesBible?: SeriesBible;
   visualSpecVersion?: number;
   generatedAt?: Date;
 }
 
 export function createVisualPlan(spec: EpisodeSpec, timeline: RealizedTimeline, options: VisualPlanOptions): { visualSpec: ShotVisualSpec; manifest: AssetManifest } {
   assertVisualPlanInputs(spec, timeline, options.profile);
+  if (options.seriesBible) {
+    assertSeriesBible(options.seriesBible);
+    assertSeriesBibleMatchesEpisode(spec, options.seriesBible);
+  }
   const visualSpecVersion = options.visualSpecVersion ?? 1;
   if (!Number.isInteger(visualSpecVersion) || visualSpecVersion < 1) throw new Error("Visual spec version must be a positive integer.");
   const generatedAt = (options.generatedAt ?? new Date()).toISOString();
   const timingByShot = collectShotTiming(timeline);
   const shots = spec.scenes.flatMap(scene => scene.shots.map(shot => {
+    const continuity = options.seriesBible ? resolveShotVisualContext({ characterIds: shot.characterIds, locationId: scene.location.id, styleReference: options.profile.styleReference }, options.seriesBible) : undefined;
     const visual = {
       id: `VSP_${shot.id}`,
       sceneId: scene.id,
@@ -28,14 +35,15 @@ export function createVisualPlan(spec: EpisodeSpec, timeline: RealizedTimeline, 
       mood: inferMood(shot.visual, options.profile.defaultMood),
       cameraIntent: inferCameraIntent(shot.visual, options.profile.defaultCameraIntent),
       styleReference: options.profile.styleReference,
+      ...(continuity ? { continuity } : {}),
       ...(timingByShot.get(shot.id) ? { realizedTiming: timingByShot.get(shot.id) } : {}),
-      sourceHash: hash({ sceneId: scene.id, shotId: shot.id, visual: shot.visual, purpose: shot.purpose, characterIds: shot.characterIds, locationId: scene.location.id, timelineVersion: timeline.timelineVersion, timing: timingByShot.get(shot.id) ?? null, profile: options.profile })
+      sourceHash: hash({ sceneId: scene.id, shotId: shot.id, visual: shot.visual, purpose: shot.purpose, characterIds: shot.characterIds, locationId: scene.location.id, timelineVersion: timeline.timelineVersion, timing: timingByShot.get(shot.id) ?? null, profile: options.profile, continuity })
     };
     return visual;
   }));
-  const visualSpec: ShotVisualSpec = { schemaVersion: "0.1", visualSpecVersion, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceTimelineVersion: timeline.timelineVersion, generatedAt, shots };
+  const visualSpec: ShotVisualSpec = { schemaVersion: "0.1", visualSpecVersion, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceTimelineVersion: timeline.timelineVersion, ...(options.seriesBible ? { sourceSeriesBibleVersion: options.seriesBible.bibleVersion } : {}), generatedAt, shots };
   const manifest: AssetManifest = {
-    schemaVersion: "0.1", manifestRevision: 1, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceVisualSpecVersion: visualSpec.visualSpecVersion, generatedAt,
+    schemaVersion: "0.1", manifestRevision: 1, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceVisualSpecVersion: visualSpec.visualSpecVersion, ...(options.seriesBible ? { sourceSeriesBibleVersion: options.seriesBible.bibleVersion } : {}), generatedAt,
     assets: shots.map(shot => ({ id: `VAS_${shot.shotId}`, shotId: shot.shotId, shotVisualSpecId: shot.id, activeVersionId: `VAS_${shot.shotId}_v1`, versions: [{ id: `VAS_${shot.shotId}_v1`, version: 1, lifecycle: "PLANNED", createdAt: generatedAt }] }))
   };
   assertAssetManifest(manifest);
