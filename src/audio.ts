@@ -14,12 +14,15 @@ export interface SpeechProvider {
 export interface AudioRunOptions {
   outputPath: string;
   voices: AudioVoiceRegistry;
+  timelineVersion?: number;
   provider?: SpeechProvider;
   generatedAt?: Date;
 }
 
 export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions): Promise<{ manifest: AudioAssetManifest; timeline: RealizedTimeline }> {
   assertValidatedEpisodeSpec(spec);
+  const timelineVersion = options.timelineVersion ?? 1;
+  if (!Number.isInteger(timelineVersion) || timelineVersion < 1) throw new Error("Timeline version must be a positive integer.");
   const provider = options.provider ?? macosSayProvider;
   const generatedAt = (options.generatedAt ?? new Date()).toISOString();
   const assets: AudioAssetManifest["assets"] = [];
@@ -48,7 +51,7 @@ export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions
   const base = { schemaVersion: "0.1" as const, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, generatedAt };
   return {
     manifest: { ...base, provider: provider.name, assets },
-    timeline: { ...base, totalDurationSeconds: cursor, segments }
+    timeline: { ...base, timelineVersion, totalDurationSeconds: cursor, segments }
   };
 }
 

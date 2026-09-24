@@ -51,6 +51,16 @@ test("creates versioned audio assets and an audio-led realized timeline", async 
       ["SEG_SH_001_001_DIALOGUE", 2.5, 3.75, "Kael"]
     ]);
     assert.equal(result.timeline.totalDurationSeconds, 3.75);
+    assert.equal(result.timeline.timelineVersion, 1);
+    assert.equal(result.timeline.sourceSpecVersion, 1);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("records an explicit timeline version for a regenerated audio timeline", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    const result = await createAudioRun(spec, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([1, 1]), timelineVersion: 2 });
+    assert.equal(result.timeline.timelineVersion, 2);
     assert.equal(result.timeline.sourceSpecVersion, 1);
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });

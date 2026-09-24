@@ -110,6 +110,7 @@ export interface AudioAssetManifest {
 
 export interface RealizedTimeline {
   schemaVersion: "0.1";
+  timelineVersion: number;
   episodeId: string;
   sourceSpecVersion: number;
   generatedAt: string;
@@ -124,5 +125,60 @@ export interface RealizedTimeline {
     endSeconds: number;
     durationSeconds: number;
     audioAssetId: string;
+  }>;
+}
+
+export interface VisualProfile {
+  styleReference: string;
+  defaultLighting: string;
+  defaultMood: string;
+  defaultCameraIntent: string;
+}
+
+export interface ShotVisualSpec {
+  schemaVersion: "0.1";
+  visualSpecVersion: number;
+  episodeId: string;
+  sourceSpecVersion: number;
+  sourceTimelineVersion: number;
+  generatedAt: string;
+  shots: Array<{
+    id: string;
+    sceneId: string;
+    shotId: string;
+    characterIds: string[];
+    locationId: string;
+    visualIntent: string;
+    framing: string;
+    action: string;
+    expression: string;
+    lighting: string;
+    mood: string;
+    cameraIntent: string;
+    styleReference: string;
+    realizedTiming?: { startSeconds: number; endSeconds: number; durationSeconds: number };
+    sourceHash: string;
+  }>;
+}
+
+export interface AssetManifest {
+  schemaVersion: "0.1";
+  manifestRevision: number;
+  episodeId: string;
+  sourceSpecVersion: number;
+  sourceVisualSpecVersion: number;
+  generatedAt: string;
+  assets: Array<{
+    id: string;
+    shotId: string;
+    shotVisualSpecId: string;
+    activeVersionId: string;
+    versions: Array<{
+      id: string;
+      version: number;
+      lifecycle: "PLANNED";
+      createdAt: string;
+      supersedesVersionId?: string;
+    }>;
   }>;
 }
