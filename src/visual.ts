@@ -98,7 +98,8 @@ export function assertAssetManifest(value: unknown): asserts value is AssetManif
     if (active.length !== 1) throw new Error(`Visual asset '${asset.id}' must designate exactly one active version.`);
     const seenVersions = new Set<number>();
     for (const version of asset.versions) {
-      if (!version.id || !Number.isInteger(version.version) || version.version < 1 || version.lifecycle !== "PLANNED" || seenVersions.has(version.version)) throw new Error(`Visual asset '${asset.id}' has invalid versions.`);
+      if (!version.id || !Number.isInteger(version.version) || version.version < 1 || !["PLANNED", "GENERATED"].includes(version.lifecycle) || seenVersions.has(version.version)) throw new Error(`Visual asset '${asset.id}' has invalid versions.`);
+      if (version.lifecycle === "GENERATED" && (!version.output || version.output.format !== "png" || !version.output.path || version.output.byteLength <= 0 || !/^[a-f0-9]{64}$/.test(version.output.sha256) || !version.provider?.name || !version.provider.model || !version.provider.promptHash)) throw new Error(`Generated visual asset '${asset.id}' is missing output provenance.`);
       seenVersions.add(version.version);
     }
   }

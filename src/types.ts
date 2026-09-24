@@ -176,9 +176,21 @@ export interface AssetManifest {
     versions: Array<{
       id: string;
       version: number;
-      lifecycle: "PLANNED";
+      lifecycle: "PLANNED" | "GENERATED";
       createdAt: string;
       supersedesVersionId?: string;
+      output?: {
+        path: string;
+        format: "png";
+        byteLength: number;
+        sha256: string;
+      };
+      provider?: {
+        name: string;
+        model: string;
+        promptHash: string;
+        revisedPrompt?: string;
+      };
     }>;
   }>;
 }

@@ -1,6 +1,6 @@
 {
   "name": "episode-production-agent",
-  "version": "0.3.0-alpha.0",
+  "version": "0.4.0-alpha.0",
   "private": true,
   "type": "module",
   "description": "Episode production pipeline with deterministic planning and local audio timing.",
@@ -9,6 +9,7 @@
     "audio": "node --experimental-strip-types src/audio-cli.ts",
     "visual-plan": "node --experimental-strip-types src/visual-cli.ts",
     "visual-regenerate": "node --experimental-strip-types src/visual-regenerate-cli.ts",
+    "visual-generate": "node --experimental-strip-types src/image-cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "engines": {
