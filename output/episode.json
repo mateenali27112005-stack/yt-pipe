@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "0.1",
+  "specVersion": "1",
+  "lifecycle": "VALIDATED",
+  "episode": {
+    "id": "EP_EC28E6094C",
+    "title": "The Awakening",
+    "seriesId": "SERIES_AWAKENING"
+  },
+  "registry": {
+    "characters": [
+      {
+        "id": "CHAR_0E8B455B15",
+        "name": "Kael"
+      }
+    ],
+    "locations": [
+      {
+        "id": "LOC_A299570CB3",
+        "name": "ruined_temple"
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "id": "SC_E0AB217AFC",
+      "order": 1,
+      "title": "The Ruined Temple",
+      "location": {
+        "id": "LOC_A299570CB3",
+        "name": "ruined_temple"
+      },
+      "time": "night",
+      "purpose": "Kael discovers the forbidden symbol.",
+      "shots": [
+        {
+          "id": "SH_488F9F1A67",
+          "order": 1,
+          "purpose": "Reveal the forbidden symbol.",
+          "characterIds": [
+            "CHAR_0E8B455B15"
+          ],
+          "narration": "The symbol had been buried for centuries.",
+          "dialogue": "Kael: What is this?",
+          "visual": "Extreme close-up of an ancient glowing symbol carved into stone. Cold blue illumination. Ominous atmosphere.",
+          "plannedTiming": {
+            "min": 3.5,
+            "target": 4.2,
+            "max": 5
+          }
+        }
+      ]
+    }
+  ],
+  "provenance": {
+    "parser": "episode-production-agent",
+    "parserVersion": "0.1.0"
+  }
+}

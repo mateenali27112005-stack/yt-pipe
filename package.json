@@ -1,0 +1,14 @@
+{
+  "name": "episode-production-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic V0.1 story-to-production-plan compiler.",
+  "scripts": {
+    "parse": "node --experimental-strip-types src/cli.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  }
+}
