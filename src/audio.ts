@@ -19,6 +19,7 @@ export interface AudioRunOptions {
 }
 
 export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions): Promise<{ manifest: AudioAssetManifest; timeline: RealizedTimeline }> {
+  assertValidatedEpisodeSpec(spec);
   const provider = options.provider ?? macosSayProvider;
   const generatedAt = (options.generatedAt ?? new Date()).toISOString();
   const assets: AudioAssetManifest["assets"] = [];
@@ -56,13 +57,38 @@ function segmentInputs(shot: EpisodeSpec["scenes"][number]["shots"][number], cha
   if (shot.narration?.trim()) inputs.push({ role: "narration", text: shot.narration.trim(), voice: voices.narrator });
   if (shot.dialogue?.trim()) {
     const match = shot.dialogue.match(/^([^:]+):\s*(.+)$/);
-    const speaker = match?.[1]?.trim();
+    const suppliedSpeaker = match?.[1]?.trim();
     const text = (match?.[2] ?? shot.dialogue).trim();
     const declaredNames = shot.characterIds.map(id => characters.get(id)).filter((value): value is string => Boolean(value));
-    if (speaker && !declaredNames.some(name => name.localeCompare(speaker, undefined, { sensitivity: "accent" }) === 0)) throw new Error(`Dialogue speaker '${speaker}' is not declared on ${shot.id}.`);
-    inputs.push({ role: "dialogue", text, voice: speaker ? (voices.characters?.[speaker] ?? voices.narrator) : voices.narrator, ...(speaker ? { speaker } : {}) });
+    const speaker = suppliedSpeaker ? declaredNames.find(name => sameName(name, suppliedSpeaker)) : undefined;
+    if (suppliedSpeaker && !speaker) throw new Error(`Dialogue speaker '${suppliedSpeaker}' is not declared on ${shot.id}.`);
+    const characterVoice = speaker ? Object.entries(voices.characters ?? {}).find(([name]) => sameName(name, speaker))?.[1] : undefined;
+    inputs.push({ role: "dialogue", text, voice: characterVoice ?? voices.narrator, ...(speaker ? { speaker } : {}) });
   }
   return inputs;
+}
+
+export function assertValidatedEpisodeSpec(value: unknown): asserts value is EpisodeSpec {
+  if (!value || typeof value !== "object") throw new Error("Audio production requires an EpisodeSpec JSON object.");
+  const spec = value as Partial<EpisodeSpec>;
+  if (spec.schemaVersion !== "0.1") throw new Error("Audio production requires EpisodeSpec schemaVersion '0.1'.");
+  if (spec.lifecycle !== "VALIDATED") throw new Error("Audio production requires an EpisodeSpec with lifecycle VALIDATED.");
+  if (!spec.episode || typeof spec.episode.id !== "string" || !spec.episode.id.trim()) throw new Error("EpisodeSpec is missing a valid episode.id.");
+  if (!Number.isInteger(spec.specVersion) || spec.specVersion < 1) throw new Error("EpisodeSpec is missing a positive integer specVersion.");
+  if (!spec.registry || !Array.isArray(spec.registry.characters) || !Array.isArray(spec.registry.locations)) throw new Error("EpisodeSpec registry must contain character and location arrays.");
+  if (!Array.isArray(spec.scenes) || spec.scenes.length === 0) throw new Error("EpisodeSpec must contain at least one scene.");
+  for (const scene of spec.scenes) {
+    if (!scene || typeof scene.id !== "string" || !Array.isArray(scene.shots)) throw new Error("EpisodeSpec contains an invalid scene.");
+    for (const shot of scene.shots) {
+      if (!shot || typeof shot.id !== "string" || !Array.isArray(shot.characterIds)) throw new Error("EpisodeSpec contains an invalid shot.");
+      if (shot.narration !== undefined && typeof shot.narration !== "string") throw new Error(`EpisodeSpec narration must be text for ${shot.id}.`);
+      if (shot.dialogue !== undefined && typeof shot.dialogue !== "string") throw new Error(`EpisodeSpec dialogue must be text for ${shot.id}.`);
+    }
+  }
+}
+
+function sameName(left: string, right: string): boolean {
+  return left.trim().toLocaleLowerCase("en-US") === right.trim().toLocaleLowerCase("en-US");
 }
 
 export const macosSayProvider: SpeechProvider = {

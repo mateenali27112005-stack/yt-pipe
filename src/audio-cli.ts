@@ -1,6 +1,6 @@
-import { access, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { createAudioRun } from "./audio.ts";
+import { assertValidatedEpisodeSpec, createAudioRun } from "./audio.ts";
 import type { AudioVoiceRegistry, EpisodeSpec } from "./types.ts";
 
 try {
@@ -13,6 +13,7 @@ try {
   const overwrite = options.includes("--overwrite");
   await ensureNewAudioRun(outputPath, overwrite);
   const spec = await readJson<EpisodeSpec>(resolve(episodePath), "EpisodeSpec");
+  assertValidatedEpisodeSpec(spec);
   const voices = await readVoices(resolve(voiceRegistryPath));
   await mkdir(dirname(outputPath), { recursive: true });
   const stagingPath = await mkdtemp(`${outputPath}.staging-`);
@@ -45,12 +46,9 @@ async function readVoices(path: string): Promise<AudioVoiceRegistry> {
 async function ensureNewAudioRun(outputPath: string, overwrite: boolean) {
   if (overwrite) return;
   try {
-    const entries = await readdir(outputPath);
-    if (entries.length > 0) throw new Error(`Refusing to write into non-empty ${outputPath}. Choose a new run directory or pass --overwrite explicitly.`);
+    await access(outputPath);
+    throw new Error(`Refusing to write into existing ${outputPath}. Choose a new run directory or pass --overwrite explicitly.`);
   } catch (cause) {
     if (cause instanceof Error && cause.message.startsWith("Refusing")) throw cause;
-  }
-  for (const filename of ["audio_manifest.json", "realized_timeline.json"]) {
-    try { await access(resolve(outputPath, filename)); throw new Error(`Refusing to overwrite ${resolve(outputPath, filename)}. Choose a new run directory or pass --overwrite explicitly.`); } catch (cause) { if (cause instanceof Error && cause.message.startsWith("Refusing")) throw cause; }
   }
 }

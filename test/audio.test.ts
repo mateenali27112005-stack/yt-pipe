@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { createAudioRun, type SpeechProvider } from "../src/audio.ts";
 import type { EpisodeSpec } from "../src/types.ts";
 
@@ -19,6 +21,7 @@ const spec: EpisodeSpec = {
   }],
   provenance: { parser: "episode-production-agent", parserVersion: "0.1.0" }
 };
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function fakeProvider(durations: number[]): SpeechProvider {
   let call = 0;
@@ -69,9 +72,51 @@ test("falls back to the narrator voice for dialogue without a character assignme
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
+test("canonicalizes a case-insensitive dialogue speaker before selecting its voice", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    const caseVariant = structuredClone(spec);
+    caseVariant.scenes[0].shots[0].dialogue = "kael: What is this?";
+    const result = await createAudioRun(caseVariant, { outputPath: temp, voices: { narrator: "Samantha", characters: { Kael: "Daniel" } }, provider: fakeProvider([1, 1]) });
+    assert.equal(result.timeline.segments[1].speaker, "Kael");
+    assert.equal(result.manifest.assets[1].voice, "Daniel");
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("rejects a DRAFT EpisodeSpec before generating audio", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    const draft = structuredClone(spec);
+    draft.lifecycle = "DRAFT";
+    await assert.rejects(createAudioRun(draft, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([1]) }), /lifecycle VALIDATED/);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("rejects malformed EpisodeSpec input before generating audio", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    await assert.rejects(createAudioRun({ lifecycle: "VALIDATED", schemaVersion: "0.1" } as EpisodeSpec, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([1]) }), /missing a valid episode.id/);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
 test("rejects non-positive measured durations", async () => {
   const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
   try {
     await assert.rejects(createAudioRun(spec, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([0]) }), /invalid duration/);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("audio CLI rejects an existing empty output directory without invoking a provider", () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-cli-"));
+  try {
+    const episodePath = join(temp, "episode.json");
+    const voicesPath = join(temp, "voices.json");
+    const outputPath = join(temp, "run");
+    writeFileSync(episodePath, JSON.stringify(spec));
+    writeFileSync(voicesPath, JSON.stringify({ narrator: "Samantha" }));
+    mkdirSync(outputPath);
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", "src/audio-cli.ts", episodePath, outputPath, "--voice-registry", voicesPath], { cwd: root, encoding: "utf8" });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Refusing to write into existing/);
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
