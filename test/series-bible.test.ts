@@ -75,6 +75,21 @@ test("rejects stale Bible content before image generation", async () => {
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
 
+test("keeps content hashes stable across metadata-only Bible revisions while preserving revision provenance", async () => {
+  const bibleV2 = structuredClone(bible);
+  bibleV2.bibleVersion = 2;
+  bibleV2.generatedAt = "2026-09-26T12:00:00.000Z";
+  const v1Plan = createVisualPlan(spec, timeline, { profile, seriesBible: bible, generatedAt: new Date("2026-09-25T12:00:00.000Z") });
+  const v2Plan = createVisualPlan(spec, timeline, { profile, seriesBible: bibleV2, generatedAt: new Date("2026-09-26T12:00:00.000Z") });
+  assert.equal(v1Plan.visualSpec.shots[0].continuity?.sourceHash, v2Plan.visualSpec.shots[0].continuity?.sourceHash);
+  assert.equal(v1Plan.visualSpec.sourceSeriesBibleVersion, 1);
+  assert.equal(v2Plan.visualSpec.sourceSeriesBibleVersion, 2);
+  assert.equal(v1Plan.manifest.sourceSeriesBibleVersion, 1);
+  assert.equal(v2Plan.manifest.sourceSeriesBibleVersion, 2);
+  const provider: ImageProvider = { name: "should-not-run", async generate() { throw new Error("provider should not run"); } };
+  await assert.rejects(generateVisualAsset(v1Plan.visualSpec, v1Plan.manifest, "VAS_SH_001_001", { outputDirectory: join(tmpdir(), "series-bible-version-check"), provider, seriesBible: bibleV2 }), /SeriesBible version does not match/);
+});
+
 test("V0.5 CLI plans and generates with the same SeriesBible revision", () => {
   const temp = mkdtempSync(join(tmpdir(), "series-bible-cli-"));
   try {
