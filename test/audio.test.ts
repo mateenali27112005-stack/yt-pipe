@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { createAudioRun, type SpeechProvider } from "../src/audio.ts";
+import type { EpisodeSpec } from "../src/types.ts";
+
+const spec: EpisodeSpec = {
+  schemaVersion: "0.1",
+  specVersion: 1,
+  lifecycle: "VALIDATED",
+  episode: { id: "EP_001", title: "The Awakening", seriesId: "SERIES_A" },
+  registry: { characters: [{ id: "CHAR_KAEL", name: "Kael" }], locations: [{ id: "LOC_TEMPLE", name: "ruined_temple" }] },
+  scenes: [{
+    id: "SC_001", order: 1, title: "The Ruined Temple", location: { id: "LOC_TEMPLE", name: "ruined_temple" }, purpose: "A discovery.",
+    shots: [{ id: "SH_001_001", order: 1, purpose: "Reveal.", characterIds: ["CHAR_KAEL"], narration: "The symbol had been buried for centuries.", dialogue: "Kael: What is this?", visual: "An ancient symbol.", plannedTiming: { min: 3.5, target: 4.2, max: 5 } }]
+  }],
+  provenance: { parser: "episode-production-agent", parserVersion: "0.1.0" }
+};
+
+function fakeProvider(durations: number[]): SpeechProvider {
+  let call = 0;
+  return {
+    name: "macos-say",
+    async synthesize(_text, _voice, outputPath) { await mkdir(join(outputPath, ".."), { recursive: true }); await writeFile(outputPath, "audio"); },
+    async measureDuration() { return durations[call++]!; }
+  };
+}
+
+test("creates versioned audio assets and an audio-led realized timeline", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    const result = await createAudioRun(spec, {
+      outputPath: join(temp, "assets"),
+      voices: { narrator: "Samantha", characters: { Kael: "Daniel" } },
+      provider: fakeProvider([2.5, 1.25]),
+      generatedAt: new Date("2026-09-25T12:00:00.000Z")
+    });
+    assert.equal(result.manifest.assets.length, 2);
+    assert.deepEqual(result.manifest.assets.map(asset => [asset.id, asset.voice, asset.path]), [
+      ["AST_SH_001_001_NARRATION", "Samantha", "assets/AST_SH_001_001_NARRATION.aiff"],
+      ["AST_SH_001_001_DIALOGUE", "Daniel", "assets/AST_SH_001_001_DIALOGUE.aiff"]
+    ]);
+    assert.deepEqual(result.timeline.segments.map(segment => [segment.id, segment.startSeconds, segment.endSeconds, segment.speaker]), [
+      ["SEG_SH_001_001_NARRATION", 0, 2.5, undefined],
+      ["SEG_SH_001_001_DIALOGUE", 2.5, 3.75, "Kael"]
+    ]);
+    assert.equal(result.timeline.totalDurationSeconds, 3.75);
+    assert.equal(result.timeline.sourceSpecVersion, 1);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("fails closed when dialogue names a speaker outside the shot", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    const invalid = structuredClone(spec);
+    invalid.scenes[0].shots[0].dialogue = "Mira: What is this?";
+    await assert.rejects(createAudioRun(invalid, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([1]) }), /not declared/);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("falls back to the narrator voice for dialogue without a character assignment", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    const result = await createAudioRun(spec, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([1, 1]) });
+    assert.equal(result.manifest.assets[1].voice, "Samantha");
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("rejects non-positive measured durations", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-"));
+  try {
+    await assert.rejects(createAudioRun(spec, { outputPath: temp, voices: { narrator: "Samantha" }, provider: fakeProvider([0]) }), /invalid duration/);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});

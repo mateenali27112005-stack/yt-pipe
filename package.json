@@ -1,11 +1,12 @@
 {
   "name": "episode-production-agent",
-  "version": "0.1.0",
+  "version": "0.2.0-alpha.0",
   "private": true,
   "type": "module",
-  "description": "Deterministic V0.1 story-to-production-plan compiler.",
+  "description": "Episode production pipeline with deterministic planning and local audio timing.",
   "scripts": {
     "parse": "node --experimental-strip-types src/cli.ts",
+    "audio": "node --experimental-strip-types src/audio-cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "engines": {
