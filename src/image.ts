@@ -15,6 +15,11 @@ export interface ImageGenerationOptions {
   generatedAt?: Date;
 }
 
+export interface ImagePublicationOptions extends ImageGenerationOptions {
+  manifestPath: string;
+  publishManifest?: (manifest: AssetManifest, path: string) => Promise<void>;
+}
+
 export async function generateVisualAsset(visualSpec: ShotVisualSpec, manifest: AssetManifest, assetId: string, options: ImageGenerationOptions): Promise<AssetManifest> {
   assertVisualGenerationInputs(visualSpec, manifest, assetId);
   const provider = options.provider ?? openAiImageProvider;
@@ -56,6 +61,21 @@ export async function generateVisualAsset(visualSpec: ShotVisualSpec, manifest: 
   const next = { ...manifest, manifestRevision: manifest.manifestRevision + 1, generatedAt: createdAt, assets };
   assertAssetManifest(next);
   return next;
+}
+
+export async function generateAndPublishVisualAsset(visualSpec: ShotVisualSpec, manifest: AssetManifest, assetId: string, options: ImagePublicationOptions): Promise<AssetManifest> {
+  const next = await generateVisualAsset(visualSpec, manifest, assetId, options);
+  const generatedAsset = next.assets.find(asset => asset.id === assetId);
+  const activeVersion = generatedAsset?.versions.find(version => version.id === generatedAsset.activeVersionId);
+  if (!activeVersion?.output) throw new Error(`Generated visual asset '${assetId}' has no published output metadata.`);
+  const imagePath = resolve(options.outputDirectory, activeVersion.output.path.replace(/^assets\//, ""));
+  try {
+    await (options.publishManifest ?? publishManifestAtomically)(next, options.manifestPath);
+    return next;
+  } catch (cause) {
+    await rm(imagePath, { force: true });
+    throw cause;
+  }
 }
 
 export function buildImagePrompt(shot: ShotVisualSpec["shots"][number]): string {
@@ -102,5 +122,18 @@ export const openAiImageProvider: ImageProvider = {
     return { bytes: Buffer.from(image.b64_json, "base64"), model: "gpt-image-2.5-flare", ...(image.revised_prompt ? { revisedPrompt: image.revised_prompt } : {}) };
   }
 };
+
+async function publishManifestAtomically(manifest: AssetManifest, manifestPath: string): Promise<void> {
+  const destination = resolve(manifestPath);
+  await mkdir(dirname(destination), { recursive: true });
+  const stagingPath = `${destination}.staging-${process.pid}-${Date.now()}`;
+  try {
+    await writeFile(stagingPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
+    await rename(stagingPath, destination);
+  } catch (cause) {
+    await rm(stagingPath, { force: true });
+    throw cause;
+  }
+}
 
 function hash(value: string | Uint8Array) { return createHash("sha256").update(value).digest("hex"); }
