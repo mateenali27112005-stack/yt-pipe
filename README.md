@@ -42,23 +42,23 @@ V0.1 deliberately rejects free-form prose and does not call media, AI, or publis
 
 ## V0.2 Audio
 
-V0.2 consumes a validated `episode.json` without mutating it. It writes audio assets, an `audio_manifest.json`, and a `realized_timeline.json` whose durations are measured from the generated files.
+V0.2 consumes a validated `episode.json` without mutating it. It writes audio assets, an `audio_manifest.json`, and a versioned `realized_timeline.json` whose durations are measured from the generated files.
 
 ```bash
-npm run audio -- output/episode.json output/EP_001/audio/v1 --voice-registry examples/voice_registry.json
+npm run audio -- output/episode.json output/EP_001/audio/v1 --voice-registry examples/voice_registry.json --timeline-version 1
 ```
 
 The initial local provider uses macOS `say` and `afinfo`, producing AIFF files. The voice registry assigns the narrator and optional character voices. A dialogue speaker must be present in the shot's declared character list. Audio artifacts are protected from overwrite unless `--overwrite` is explicitly passed.
 
 ## V0.3 Visual Contracts
 
-V0.3 does not generate images. It deterministically derives a `shot_visual_spec.json` for each shot from a validated EpisodeSpec and matching realized timeline, then creates an `asset_manifest.json` with one planned visual asset version per shot.
+V0.3 does not generate images. It derives deterministic planning content for each shot from a validated EpisodeSpec and matching realized timeline, with runtime provenance metadata, then creates an `asset_manifest.json` with one planned visual asset version per shot.
 
 ```bash
-npm run visual-plan -- output/episode.json path/to/realized_timeline.json output/EP_001/visual/v1 --visual-profile examples/visual_profile.json
+npm run visual-plan -- output/episode.json path/to/realized_timeline.json output/EP_001/visual/v1 --visual-profile examples/visual_profile.json --visual-spec-version 1
 ```
 
-Each visual spec records character and location IDs, visual intent, framing, action, expression, lighting, mood, camera intent, style reference, realized timing, and a source hash. The asset manifest records a stable asset identity (`VAS_<shotId>`), a single active planned version, and all prior versions. Plan a regeneration without generating an image:
+Each visual spec records the source EpisodeSpec version, source timeline version, its own visual-spec version, character and location IDs, visual intent, framing, action, expression, lighting, mood, camera intent, style reference, realized timing, and a source hash. The asset manifest records the source visual-spec version, a stable asset identity (`VAS_<shotId>`), a single active planned version, and all prior versions. Plan a regeneration without generating an image:
 
 ```bash
 npm run visual-regenerate -- output/EP_001/visual/v1/asset_manifest.json VAS_SH_001_001 --overwrite

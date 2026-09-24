@@ -110,6 +110,7 @@ export interface AudioAssetManifest {
 
 export interface RealizedTimeline {
   schemaVersion: "0.1";
+  timelineVersion: number;
   episodeId: string;
   sourceSpecVersion: number;
   generatedAt: string;
@@ -136,6 +137,7 @@ export interface VisualProfile {
 
 export interface ShotVisualSpec {
   schemaVersion: "0.1";
+  visualSpecVersion: number;
   episodeId: string;
   sourceSpecVersion: number;
   sourceTimelineVersion: number;
@@ -164,7 +166,7 @@ export interface AssetManifest {
   manifestRevision: number;
   episodeId: string;
   sourceSpecVersion: number;
-  sourceVisualSpecVersion: "0.1";
+  sourceVisualSpecVersion: number;
   generatedAt: string;
   assets: Array<{
     id: string;

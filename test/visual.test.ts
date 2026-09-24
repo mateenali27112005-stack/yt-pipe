@@ -16,7 +16,7 @@ const spec: EpisodeSpec = {
   scenes: [{ id: "SC_001", order: 1, title: "Temple", location: { id: "LOC_TEMPLE", name: "ruined_temple" }, purpose: "Discovery.", shots: [{ id: "SH_001_001", order: 1, purpose: "Reveal symbol.", characterIds: ["CHAR_KAEL"], visual: "Extreme close-up of an ominous glowing symbol in blue light.", plannedTiming: { min: 3, target: 4, max: 5 } }] }],
   provenance: { parser: "episode-production-agent", parserVersion: "0.1.0" }
 };
-const timeline: RealizedTimeline = { schemaVersion: "0.1", episodeId: "EP_001", sourceSpecVersion: 1, generatedAt: "2026-09-25T12:00:00.000Z", totalDurationSeconds: 3.75, segments: [{ id: "SEG_SH_001_001_NARRATION", shotId: "SH_001_001", role: "narration", text: "A symbol.", startSeconds: 0, endSeconds: 2.5, durationSeconds: 2.5, audioAssetId: "AST_1" }, { id: "SEG_SH_001_001_DIALOGUE", shotId: "SH_001_001", role: "dialogue", speaker: "Kael", text: "What is this?", startSeconds: 2.5, endSeconds: 3.75, durationSeconds: 1.25, audioAssetId: "AST_2" }] };
+const timeline: RealizedTimeline = { schemaVersion: "0.1", timelineVersion: 1, episodeId: "EP_001", sourceSpecVersion: 1, generatedAt: "2026-09-25T12:00:00.000Z", totalDurationSeconds: 3.75, segments: [{ id: "SEG_SH_001_001_NARRATION", shotId: "SH_001_001", role: "narration", text: "A symbol.", startSeconds: 0, endSeconds: 2.5, durationSeconds: 2.5, audioAssetId: "AST_1" }, { id: "SEG_SH_001_001_DIALOGUE", shotId: "SH_001_001", role: "dialogue", speaker: "Kael", text: "What is this?", startSeconds: 2.5, endSeconds: 3.75, durationSeconds: 1.25, audioAssetId: "AST_2" }] };
 
 function plan() { return createVisualPlan(spec, timeline, { profile, generatedAt: new Date("2026-09-25T12:00:00.000Z") }); }
 
@@ -29,7 +29,21 @@ test("derives deterministic visual specs and one planned asset per shot", () => 
   assert.deepEqual(shot.realizedTiming, { startSeconds: 0, endSeconds: 3.75, durationSeconds: 3.75 });
   assert.equal(shot.framing, "extreme close-up");
   assert.equal(shot.cameraIntent, "slow push-in");
+  assert.equal(first.visualSpec.sourceTimelineVersion, 1);
+  assert.equal(first.visualSpec.visualSpecVersion, 1);
+  assert.equal(first.manifest.sourceVisualSpecVersion, 1);
   assert.equal(first.manifest.assets[0].activeVersionId, "VAS_SH_001_001_v1");
+});
+
+test("preserves a precise timeline-to-visual-spec provenance chain across replans", () => {
+  const revisedTimeline = structuredClone(timeline);
+  revisedTimeline.timelineVersion = 2;
+  const result = createVisualPlan(spec, revisedTimeline, { profile, visualSpecVersion: 2, generatedAt: new Date("2026-09-26T12:00:00.000Z") });
+  assert.equal(result.visualSpec.sourceSpecVersion, 1);
+  assert.equal(result.visualSpec.sourceTimelineVersion, 2);
+  assert.equal(result.visualSpec.visualSpecVersion, 2);
+  assert.equal(result.manifest.sourceVisualSpecVersion, 2);
+  assert.notEqual(result.visualSpec.shots[0].sourceHash, plan().visualSpec.shots[0].sourceHash);
 });
 
 test("regeneration preserves earlier asset versions and advances one active pointer", () => {

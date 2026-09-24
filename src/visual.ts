@@ -3,11 +3,14 @@ import type { AssetManifest, EpisodeSpec, RealizedTimeline, ShotVisualSpec, Visu
 
 export interface VisualPlanOptions {
   profile: VisualProfile;
+  visualSpecVersion?: number;
   generatedAt?: Date;
 }
 
 export function createVisualPlan(spec: EpisodeSpec, timeline: RealizedTimeline, options: VisualPlanOptions): { visualSpec: ShotVisualSpec; manifest: AssetManifest } {
   assertVisualPlanInputs(spec, timeline, options.profile);
+  const visualSpecVersion = options.visualSpecVersion ?? 1;
+  if (!Number.isInteger(visualSpecVersion) || visualSpecVersion < 1) throw new Error("Visual spec version must be a positive integer.");
   const generatedAt = (options.generatedAt ?? new Date()).toISOString();
   const timingByShot = collectShotTiming(timeline);
   const shots = spec.scenes.flatMap(scene => scene.shots.map(shot => {
@@ -26,13 +29,13 @@ export function createVisualPlan(spec: EpisodeSpec, timeline: RealizedTimeline, 
       cameraIntent: inferCameraIntent(shot.visual, options.profile.defaultCameraIntent),
       styleReference: options.profile.styleReference,
       ...(timingByShot.get(shot.id) ? { realizedTiming: timingByShot.get(shot.id) } : {}),
-      sourceHash: hash({ sceneId: scene.id, shotId: shot.id, visual: shot.visual, purpose: shot.purpose, characterIds: shot.characterIds, locationId: scene.location.id, timing: timingByShot.get(shot.id) ?? null, profile: options.profile })
+      sourceHash: hash({ sceneId: scene.id, shotId: shot.id, visual: shot.visual, purpose: shot.purpose, characterIds: shot.characterIds, locationId: scene.location.id, timelineVersion: timeline.timelineVersion, timing: timingByShot.get(shot.id) ?? null, profile: options.profile })
     };
     return visual;
   }));
-  const visualSpec: ShotVisualSpec = { schemaVersion: "0.1", episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceTimelineVersion: timeline.sourceSpecVersion, generatedAt, shots };
+  const visualSpec: ShotVisualSpec = { schemaVersion: "0.1", visualSpecVersion, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceTimelineVersion: timeline.timelineVersion, generatedAt, shots };
   const manifest: AssetManifest = {
-    schemaVersion: "0.1", manifestRevision: 1, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceVisualSpecVersion: visualSpec.schemaVersion, generatedAt,
+    schemaVersion: "0.1", manifestRevision: 1, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, sourceVisualSpecVersion: visualSpec.visualSpecVersion, generatedAt,
     assets: shots.map(shot => ({ id: `VAS_${shot.shotId}`, shotId: shot.shotId, shotVisualSpecId: shot.id, activeVersionId: `VAS_${shot.shotId}_v1`, versions: [{ id: `VAS_${shot.shotId}_v1`, version: 1, lifecycle: "PLANNED", createdAt: generatedAt }] }))
   };
   assertAssetManifest(manifest);
@@ -63,7 +66,7 @@ export function assertVisualPlanInputs(spec: unknown, timeline: unknown, profile
   if (!episode.episode?.id || !Number.isInteger(episode.specVersion) || !Array.isArray(episode.scenes)) throw new Error("EpisodeSpec is missing required visual-planning fields.");
   if (!timeline || typeof timeline !== "object") throw new Error("Visual planning requires a RealizedTimeline JSON object.");
   const realized = timeline as Partial<RealizedTimeline>;
-  if (realized.schemaVersion !== "0.1" || realized.episodeId !== episode.episode.id || realized.sourceSpecVersion !== episode.specVersion || !Array.isArray(realized.segments)) throw new Error("RealizedTimeline does not match the EpisodeSpec.");
+  if (realized.schemaVersion !== "0.1" || !Number.isInteger(realized.timelineVersion) || (realized.timelineVersion ?? 0) < 1 || realized.episodeId !== episode.episode.id || realized.sourceSpecVersion !== episode.specVersion || !Array.isArray(realized.segments)) throw new Error("RealizedTimeline does not match the EpisodeSpec.");
   if (!profile || typeof profile !== "object") throw new Error("Visual planning requires a VisualProfile JSON object.");
   const visualProfile = profile as Partial<VisualProfile>;
   for (const field of ["styleReference", "defaultLighting", "defaultMood", "defaultCameraIntent"] as const) if (typeof visualProfile[field] !== "string" || !visualProfile[field].trim()) throw new Error(`VisualProfile requires a non-empty '${field}'.`);

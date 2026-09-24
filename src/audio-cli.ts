@@ -8,6 +8,7 @@ try {
   if (!episodePath || !output) usage();
   const option = (name: string) => { const index = options.indexOf(name); return index === -1 ? undefined : options[index + 1]; };
   const voiceRegistryPath = option("--voice-registry");
+  const timelineVersion = numberOption(option("--timeline-version"), "--timeline-version") ?? 1;
   if (!voiceRegistryPath) throw new Error("--voice-registry is required.");
   const outputPath = resolve(output);
   const overwrite = options.includes("--overwrite");
@@ -18,7 +19,7 @@ try {
   await mkdir(dirname(outputPath), { recursive: true });
   const stagingPath = await mkdtemp(`${outputPath}.staging-`);
   try {
-    const { manifest, timeline } = await createAudioRun(spec, { outputPath: resolve(stagingPath, "assets"), voices });
+    const { manifest, timeline } = await createAudioRun(spec, { outputPath: resolve(stagingPath, "assets"), voices, timelineVersion });
     await writeFile(resolve(stagingPath, "audio_manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await writeFile(resolve(stagingPath, "realized_timeline.json"), `${JSON.stringify(timeline, null, 2)}\n`);
     if (overwrite) await rm(outputPath, { recursive: true, force: true });
@@ -33,7 +34,8 @@ try {
   process.exitCode = 2;
 }
 
-function usage(): never { throw new Error("Usage: npm run audio -- <episode.json> <output-dir> --voice-registry voices.json [--overwrite]"); }
+function usage(): never { throw new Error("Usage: npm run audio -- <episode.json> <output-dir> --voice-registry voices.json [--timeline-version N] [--overwrite]"); }
+function numberOption(value: string | undefined, flag: string): number | undefined { if (value === undefined) return undefined; if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error(`${flag} must be a positive integer.`); return Number(value); }
 async function readJson<T>(path: string, label: string): Promise<T> {
   try { return JSON.parse(await readFile(path, "utf8")) as T; } catch (cause) { throw new Error(`${label} could not be parsed at ${path}: ${cause instanceof Error ? cause.message : String(cause)}`); }
 }
