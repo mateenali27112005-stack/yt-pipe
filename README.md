@@ -114,6 +114,14 @@ Every planned shot requires a `GENERATED` active PNG asset. Camera intent resolv
 
 V0.7 assembles the V0.2 audio manifest, realized timeline, and V0.6 motion plan into a renderer-ready `FinalCompositionSpec`. Narration and dialogue retain their measured asset timing; captions follow those segments; music and camera-driven SFX remain explicit planned cues. It does not synthesize music or SFX, mix audio, burn captions, or render media.
 
+## V0.9 Autonomous Production
+
+The V0.9 master orchestrator chains parsing, continuity, planning, audio, visual generation, motion composition, rendering, QC, repair, and final review. It persists `.production-state.json` with deterministic input and artifact hashes, writes artifacts atomically, and resumes only from validated completed checkpoints. The legacy `production-state.json` filename is mirrored for compatibility with earlier V0.9 tooling.
+
+The orchestrator produces a `READY_FOR_REVIEW` publishing package, but it does not publish. Publishing is a separate founder-gated lifecycle: `DRAFT -> READY_FOR_REVIEW -> APPROVED -> PUBLISHED`. Approval is bound to the package fingerprint; changing the video, metadata, visibility, schedule, captions, thumbnail, or rights evidence invalidates that approval. Rights evidence is recorded per generated asset and remains uncleared until explicitly reviewed.
+
+V0.9 currently uses the existing partial capabilities: TTS, static image generation, deterministic motion/Ken Burns composition, and local/FFmpeg rendering. Music/SFX generation, motion-AI generation, publishing integrations, analytics feedback, and the 90-day business experiment remain future milestones described in the Master Execution Plan.
+
 ```bash
 npm run postproduction-plan -- output/EP_001/audio/v1/realized_timeline.json output/EP_001/audio/v1/audio_manifest.json output/EP_001/motion/v1/motion_composition_plan.json output/EP_001/composition/v1
 ```

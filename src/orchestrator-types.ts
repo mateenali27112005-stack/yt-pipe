@@ -7,6 +7,7 @@
 
 import type { EpisodeQCReport, EpisodeRepairReport } from "./qc-types.ts";
 import type { ContinuityCheckReport } from "./continuity-types.ts";
+import type { PublishingPackage } from "./approval-types.ts";
 
 export type ProductionStage =
   | "INIT"
@@ -35,6 +36,7 @@ export interface ProductionCheckpoint {
    * REPAIRED -> hash(repair-report.json)
    */
   dataHash: string;
+  artifactPath?: string;
 }
 
 export interface CostEntry {
@@ -68,6 +70,8 @@ export interface ProductionRunState {
    */
   status: "RUNNING" | "STOPPED" | "NEEDS_HUMAN_REVIEW" | "FAILED" | "COMPLETED";
   currentStage: ProductionStage;
+  inputHash?: string;
+  activeStage?: ProductionStage;
   checkpoints: ProductionCheckpoint[];
   costs: CostLedger;
   errors: Array<{
@@ -87,5 +91,6 @@ export interface ProductionReviewPackage {
   repairReport?: EpisodeRepairReport;
   continuityReport?: ContinuityCheckReport;
   videoOutputPath?: string;
+  publishingPackage?: PublishingPackage;
   status: "READY" | "NEEDS_HUMAN_REVIEW" | "FAILED";
 }

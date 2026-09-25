@@ -5,9 +5,8 @@
  * Ensures state is persisted, checkponts are atomic, and handles QC/Repair loop.
  */
 
-import { join, dirname } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { readFile, access } from "node:fs/promises";
 
 import type {
   ProductionRunState,
@@ -42,6 +41,9 @@ import { runEpisodeQC } from "./qc.ts";
 import { decideRepairs, executeRepairs } from "./repair.ts";
 import type { SpeechProvider } from "./audio.ts";
 import type { ImageProvider } from "./image.ts";
+import { atomicWriteJson, hashArtifact, loadRunState, saveRunState } from "./orchestrator-state.ts";
+import { createPublishingPackage } from "./approval.ts";
+import type { PublishingPackage } from "./approval-types.ts";
 
 export interface OrchestratorDependencies {
   speechProvider: SpeechProvider;
@@ -54,7 +56,7 @@ export interface OrchestratorDependencies {
 
 export class MasterOrchestrator {
   private state: ProductionRunState;
-  private readonly statePath: string;
+  private readonly legacyStatePath: string;
 
   private readonly runId: string;
   private readonly seriesId: string;
@@ -71,7 +73,7 @@ export class MasterOrchestrator {
     this.seriesId = seriesId;
     this.episodeId = episodeId;
     this.deps = deps;
-    this.statePath = join(this.deps.workingDirectory, "production-state.json");
+    this.legacyStatePath = join(this.deps.workingDirectory, "production-state.json");
     this.state = {
       schemaVersion: "0.1",
       runId,
@@ -89,12 +91,20 @@ export class MasterOrchestrator {
    * Resumes or starts a run given the script markdown.
    */
   async run(scriptMarkdown: string): Promise<ProductionReviewPackage> {
-    await this.loadState();
+    try {
+      await this.loadState(scriptMarkdown);
+    } catch (err) {
+      this.state.status = "FAILED";
+      this.state.errors.push({ stage: this.state.currentStage, message: err instanceof Error ? err.message : String(err), timestamp: new Date().toISOString() });
+      await this.saveState();
+      return this.buildReviewPackage();
+    }
     if (this.state.status === "COMPLETED" || this.state.status === "NEEDS_HUMAN_REVIEW") {
       return this.buildReviewPackage();
     }
 
     this.state.status = "RUNNING";
+    this.state.inputHash = hashArtifact({ scriptMarkdown, seriesId: this.seriesId, episodeId: this.episodeId, bible: this.deps.bible });
     await this.saveState();
 
     try {
@@ -106,19 +116,19 @@ export class MasterOrchestrator {
         episodeSpec = episode;
         await this.writeArtifact("episode-spec.json", episodeSpec);
         // Stage output is durably written. Checkpoint it.
-        await this.commitCheckpoint("PARSED", episodeSpec);
+        await this.commitCheckpoint("PARSED", episodeSpec, "episode-spec.json");
 
         // Continuity Check
         const continuityReport = checkContinuity(episodeSpec, this.deps.initialContinuityState);
         await this.writeArtifact("continuity-report.json", continuityReport);
-        await this.commitCheckpoint("CONTINUITY_CHECKED", continuityReport);
+        await this.commitCheckpoint("CONTINUITY_CHECKED", continuityReport, "continuity-report.json");
         
         if (continuityReport.status === "BLOCKED") {
           return this.haltForReview("Continuity checks failed with BLOCKING violations.");
         }
 
         // We combine parsed/planned since compilation is synchronous and deterministic.
-        await this.commitCheckpoint("PLANNED", episodeSpec);
+        await this.commitCheckpoint("PLANNED", episodeSpec, "episode-spec.json");
       }
 
       // 2. AUDIO GENERATION
@@ -145,7 +155,7 @@ export class MasterOrchestrator {
           operation: "tts_synthesis",
           estimatedUsd: 0.0, // Should be calculated based on tokens
         });
-        await this.commitCheckpoint("AUDIO_GENERATED", audioManifest);
+        await this.commitCheckpoint("AUDIO_GENERATED", audioManifest, "audio-manifest.json");
       }
 
       // 3. VISUAL GENERATION
@@ -177,7 +187,7 @@ export class MasterOrchestrator {
         }
         await this.writeArtifact("visual-spec.json", visualSpec);
         await this.writeArtifact("asset-manifest.json", assetManifest);
-        await this.commitCheckpoint("VISUALS_GENERATED", assetManifest);
+        await this.commitCheckpoint("VISUALS_GENERATED", assetManifest, "asset-manifest.json");
       }
 
       // 4. MOTION & POSTPRODUCTION
@@ -201,7 +211,7 @@ export class MasterOrchestrator {
           throw new Error(`Rendering failed: ${renderReport.renderResult.reason}`);
         }
         await this.writeArtifact("render-report.json", renderReport);
-        await this.commitCheckpoint("RENDERED", renderReport);
+        await this.commitCheckpoint("RENDERED", renderReport, "render-report.json");
       }
 
       // 5. QC
@@ -209,7 +219,7 @@ export class MasterOrchestrator {
       if (!this.hasCheckpoint("QC_CHECKED")) {
         qcReport = await runEpisodeQC(composition!, { assetRoot: this.deps.workingDirectory });
         await this.writeArtifact("qc-report.json", qcReport);
-        await this.commitCheckpoint("QC_CHECKED", qcReport);
+        await this.commitCheckpoint("QC_CHECKED", qcReport, "qc-report.json");
       }
 
       // 6. REPAIR (Loop)
@@ -218,6 +228,7 @@ export class MasterOrchestrator {
           let currentQc = qcReport!;
           let repairCycles = 0;
           const MAX_CYCLES = 2;
+          let repairedArtifactPath = "qc-report.json";
 
           while (repairCycles < MAX_CYCLES && currentQc.status !== "PASS") {
             const decisions = decideRepairs(currentQc);
@@ -252,7 +263,8 @@ export class MasterOrchestrator {
 
             // Re-run QC on the updated composition
             currentQc = await runEpisodeQC(composition!, { assetRoot: this.deps.workingDirectory });
-            await this.writeArtifact(`qc-report-post-repair-${repairCycles}.json`, currentQc);
+            repairedArtifactPath = `qc-report-post-repair-${repairCycles}.json`;
+            await this.writeArtifact(repairedArtifactPath, currentQc);
             
             repairCycles++;
           }
@@ -261,7 +273,7 @@ export class MasterOrchestrator {
              throw new Error(`QC STILL FAILING after ${MAX_CYCLES} repair cycles.`);
           }
 
-          await this.commitCheckpoint("REPAIRED", currentQc);
+          await this.commitCheckpoint("REPAIRED", currentQc, repairedArtifactPath);
         }
       }
 
@@ -296,14 +308,16 @@ export class MasterOrchestrator {
 
   // --- Checkpointing & State ---
 
-  private async commitCheckpoint(stage: ProductionStage, data: any) {
-    const dataHash = createHash("sha256").update(JSON.stringify(data)).digest("hex");
+  private async commitCheckpoint(stage: ProductionStage, data: unknown, artifactPath?: string) {
+    const dataHash = hashArtifact(data);
     this.state.checkpoints.push({
       stage,
       timestamp: new Date().toISOString(),
-      dataHash
+      dataHash,
+      artifactPath
     });
     this.state.currentStage = stage;
+    this.state.activeStage = undefined;
     await this.saveState();
   }
 
@@ -312,16 +326,32 @@ export class MasterOrchestrator {
   }
 
   private async saveState() {
-    await mkdir(dirname(this.statePath), { recursive: true });
-    await writeFile(this.statePath, JSON.stringify(this.state, null, 2), "utf8");
+    await saveRunState(this.deps.workingDirectory, this.state);
+    // Preserve the original filename for existing operators and V0.9 tooling.
+    await atomicWriteJson(this.legacyStatePath, this.state);
   }
 
-  private async loadState() {
-    try {
-      const data = await readFile(this.statePath, "utf8");
-      this.state = JSON.parse(data);
-    } catch {
-      // Ignored: state doesn't exist yet, start fresh
+  private async loadState(scriptMarkdown: string) {
+    let loaded = await loadRunState(this.deps.workingDirectory);
+    if (!loaded) {
+      try { loaded = JSON.parse(await readFile(this.legacyStatePath, "utf8")) as ProductionRunState; }
+      catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause; }
+    }
+    if (!loaded) return;
+
+    const inputHash = hashArtifact({ scriptMarkdown, seriesId: this.seriesId, episodeId: this.episodeId, bible: this.deps.bible });
+    if (loaded.inputHash !== inputHash) {
+      // Changed source input invalidates all derived artifacts and checkpoints.
+      this.state = { ...this.state, inputHash };
+      return;
+    }
+    this.state = loaded;
+    for (const checkpoint of this.state.checkpoints) {
+      if (!checkpoint.artifactPath) continue;
+      const artifact = await this.readArtifact<unknown>(checkpoint.artifactPath);
+      if (artifact === null || hashArtifact(artifact) !== checkpoint.dataHash) {
+        throw new Error(`Checkpoint integrity failure at ${checkpoint.stage}: ${checkpoint.artifactPath}`);
+      }
     }
   }
 
@@ -339,7 +369,7 @@ export class MasterOrchestrator {
 
   private async writeArtifact(filename: string, data: any) {
     const p = join(this.deps.workingDirectory, filename);
-    await writeFile(p, JSON.stringify(data, null, 2), "utf8");
+    await atomicWriteJson(p, data);
   }
 
   private async readArtifact<T>(filename: string): Promise<T | null> {
@@ -355,6 +385,44 @@ export class MasterOrchestrator {
   private async buildReviewPackage(): Promise<ProductionReviewPackage> {
     const qcReport = await this.readArtifact<EpisodeQCReport>("qc-report.json") ?? undefined;
     const continuityReport = await this.readArtifact<ContinuityCheckReport>("continuity-report.json") ?? undefined;
+    const videoOutputPath = join(this.deps.workingDirectory, "render", "output.mp4");
+    let publishingPackage: PublishingPackage | undefined;
+    if (this.state.status === "COMPLETED" && await this.fileExists(videoOutputPath)) {
+      const episodeSpec = await this.readArtifact<EpisodeSpec>("episode-spec.json");
+      const assetManifest = await this.readArtifact<AssetManifest>("asset-manifest.json");
+      const audioManifest = await this.readArtifact<AudioAssetManifest>("audio-manifest.json");
+      const rightsEvidence = [
+        ...(assetManifest?.assets ?? []).map(asset => {
+          const version = asset.versions.find(candidate => candidate.id === asset.activeVersionId);
+          return {
+            assetId: asset.id,
+            provider: version?.provider?.name ?? "unknown",
+            sourceReference: version?.provider?.promptHash,
+            generatedAt: version?.createdAt ?? assetManifest?.generatedAt ?? new Date(0).toISOString(),
+            licenseStatus: "UNKNOWN" as const,
+            approvalStatus: "PENDING" as const
+          };
+        }),
+        ...(audioManifest?.assets ?? []).map(asset => ({
+          assetId: asset.id,
+          provider: audioManifest.provider,
+          generatedAt: audioManifest.generatedAt,
+          licenseStatus: "UNKNOWN" as const,
+          approvalStatus: "PENDING" as const
+        }))
+      ];
+      publishingPackage = createPublishingPackage({
+        schemaVersion: "0.1",
+        packageId: `${this.runId}:${this.episodeId}`,
+        episodeId: this.episodeId,
+        runId: this.runId,
+        videoOutputPath,
+        title: episodeSpec?.episode.title ?? this.episodeId,
+        description: `Episode ${episodeSpec?.episode.title ?? this.episodeId}`,
+        visibility: "private",
+        rightsEvidence
+      });
+    }
     
     return {
       schemaVersion: "0.1",
@@ -363,7 +431,13 @@ export class MasterOrchestrator {
       cost: this.state.costs,
       qcReport,
       continuityReport,
+      videoOutputPath: await this.fileExists(videoOutputPath) ? videoOutputPath : undefined,
+      publishingPackage,
       status: this.state.status === "COMPLETED" ? "READY" : this.state.status
     };
+  }
+
+  private async fileExists(path: string): Promise<boolean> {
+    try { await access(path); return true; } catch { return false; }
   }
 }

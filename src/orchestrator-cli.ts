@@ -16,7 +16,7 @@ import type { SeriesBible } from "./types.ts";
 
 export async function runOrchestratorCli(argv: string[]): Promise<number> {
   const args = argv.slice(2);
-  if (args.length < 4) {
+  if (args.length < 6) {
     console.error("Usage: agy-orchestrator <runId> <seriesId> <episodeId> <scriptPath> <biblePath> <workingDir>");
     return 1;
   }
