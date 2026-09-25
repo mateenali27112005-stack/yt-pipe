@@ -115,8 +115,25 @@ const OK_INTEGRITY_REPORT: IntegrityReport = {
   status: "OK",
   episodeId: "EP_001",
   compositionVersion: 1,
+  compositionSourceHash: "d".repeat(64),
   checkedAt: "2026-09-25T10:00:00.000Z",
-  assets: [],
+  assets: [
+    {
+      kind: "visual",
+      assetId: "VAS_1",
+      assetVersionId: "VAS_1_v1",
+      path: "assets/shot1.png",
+      resolvedPath: "/tmp/assets/assets/shot1.png",
+      status: "OK",
+    },
+    {
+      kind: "audio",
+      assetId: "AST_1",
+      path: "assets/seg1.aiff",
+      resolvedPath: "/tmp/assets/assets/seg1.aiff",
+      status: "OK",
+    },
+  ],
   failures: [],
 };
 
@@ -286,4 +303,60 @@ test("Phase 2 has no FFmpeg dependency — no ffmpeg/ffprobe process invocations
   assert.ok(!/['"` ]ffprobe[\s"'`]/.test(rendererSrc), "renderer.ts must not invoke the ffprobe binary");
   assert.ok(!typesSrc.includes("spawnSync"), "renderer-types.ts must not spawn processes");
   assert.ok(!/['"` ]ffmpeg[\s"'`]/.test(typesSrc), "renderer-types.ts must not invoke the ffmpeg binary");
+});
+
+test("throws RenderError when compositionSourceHash in report does not match composition", async () => {
+  const renderer = new FakeRenderer();
+  const reportWithWrongHash: IntegrityReport = {
+    ...OK_INTEGRITY_REPORT,
+    compositionSourceHash: "x".repeat(64),
+  };
+  const ctx = { ...VALID_CONTEXT, integrityReport: reportWithWrongHash };
+  await assert.rejects(
+    () => renderer.render(VALID_COMPOSITION, ctx),
+    (err) => err instanceof RenderError && /compositionSourceHash/.test(err.message)
+  );
+});
+
+test("throws RenderError when visual asset in composition lacks an OK integrity result", async () => {
+  const renderer = new FakeRenderer();
+  const reportMissingVisual: IntegrityReport = {
+    ...OK_INTEGRITY_REPORT,
+    assets: OK_INTEGRITY_REPORT.assets.filter((a) => a.kind !== "visual"),
+  };
+  const ctx = { ...VALID_CONTEXT, integrityReport: reportMissingVisual };
+  await assert.rejects(
+    () => renderer.render(VALID_COMPOSITION, ctx),
+    (err) => err instanceof RenderError && /visual asset 'VAS_1'/.test(err.message)
+  );
+});
+
+test("throws RenderError when audio asset in composition lacks an OK integrity result", async () => {
+  const renderer = new FakeRenderer();
+  const reportMissingAudio: IntegrityReport = {
+    ...OK_INTEGRITY_REPORT,
+    assets: OK_INTEGRITY_REPORT.assets.filter((a) => a.kind !== "audio"),
+  };
+  const ctx = { ...VALID_CONTEXT, integrityReport: reportMissingAudio };
+  await assert.rejects(
+    () => renderer.render(VALID_COMPOSITION, ctx),
+    (err) => err instanceof RenderError && /audio asset 'AST_1'/.test(err.message)
+  );
+});
+
+test("throws RenderError when outputPath does not end in .mp4", async () => {
+  const renderer = new FakeRenderer();
+  const ctx = { ...VALID_CONTEXT, outputPath: "/tmp/output/episode.avi" };
+  await assert.rejects(
+    () => renderer.render(VALID_COMPOSITION, ctx),
+    (err) => err instanceof RenderError && /\.mp4 extension/.test(err.message)
+  );
+});
+
+test("RenderError preserves the supplied cause Error", () => {
+  const cause = new Error("low level issue");
+  const err = new RenderError("Precondition failed", cause);
+  assert.equal(err.message, "Precondition failed");
+  assert.equal(err.name, "RenderError");
+  assert.equal(err.cause, cause);
 });

@@ -61,6 +61,7 @@ export interface IntegrityResults {
   status: "OK" | "FAILED";
   episodeId: string;
   compositionVersion: number;
+  compositionSourceHash?: string;
   assets: AssetIntegrityResult[];
   failures: AssetIntegrityResult[];
 }

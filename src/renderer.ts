@@ -21,9 +21,11 @@
  *   - cleaning up any staging output on failure
  */
 
+import { normalize, resolve } from "node:path";
 import type { FinalCompositionSpec } from "./types.ts";
 import { RenderError } from "./renderer-types.ts";
 import type { RenderContext, RenderResult } from "./renderer-types.ts";
+import type { AssetIntegrityResult } from "./integrity-types.ts";
 
 export type { RenderContext, RenderResult, RenderSuccess, RenderFailure, RenderError } from "./renderer-types.ts";
 
@@ -70,7 +72,14 @@ export function assertRenderPreconditions(
     throw new RenderError("Renderer requires a FinalCompositionSpec object.");
   }
   const c = composition as Partial<FinalCompositionSpec>;
-  if (!c.episodeId || typeof c.compositionVersion !== "number" || !c.visualComposition || !Array.isArray(c.visualComposition.shots) || !Array.isArray(c.narrationDialogueTracks) || typeof c.durationSeconds !== "number") {
+  if (
+    !c.episodeId ||
+    typeof c.compositionVersion !== "number" ||
+    !c.visualComposition ||
+    !Array.isArray(c.visualComposition.shots) ||
+    !Array.isArray(c.narrationDialogueTracks) ||
+    typeof c.durationSeconds !== "number"
+  ) {
     throw new RenderError("FinalCompositionSpec is missing required fields for rendering.");
   }
 
@@ -87,27 +96,76 @@ export function assertRenderPreconditions(
     throw new RenderError("RenderContext.outputPath must be a non-empty string.");
   }
 
+  // Output boundary check
+  const normalizedOutput = normalize(resolve(ctx.outputPath));
+  if (!normalizedOutput.toLowerCase().endsWith(".mp4")) {
+    throw new RenderError(`RenderContext.outputPath must have a .mp4 extension, got: '${ctx.outputPath}'.`);
+  }
+
   // -- integrity gate --
   if (!ctx.integrityReport || typeof ctx.integrityReport !== "object") {
     throw new RenderError("RenderContext.integrityReport is required. Run verifyAssetIntegrity() first.");
   }
-  if ((ctx.integrityReport as any).status !== "OK") {
+  const report = ctx.integrityReport as any;
+  if (report.status !== "OK") {
     throw new RenderError(
-      `Renderer refuses to render: integrity report status is '${(ctx.integrityReport as any).status}'. ` +
+      `Renderer refuses to render: integrity report status is '${report.status}'. ` +
       "All assets must pass Phase 1 integrity verification before rendering."
     );
   }
-  if ((ctx.integrityReport as any).episodeId !== c.episodeId) {
+  if (report.episodeId !== c.episodeId) {
     throw new RenderError(
-      `Renderer refuses to render: integrity report episodeId '${(ctx.integrityReport as any).episodeId}' ` +
+      `Renderer refuses to render: integrity report episodeId '${report.episodeId}' ` +
       `does not match composition episodeId '${c.episodeId}'.`
     );
   }
-  if ((ctx.integrityReport as any).compositionVersion !== c.compositionVersion) {
+  if (report.compositionVersion !== c.compositionVersion) {
     throw new RenderError(
       `Renderer refuses to render: integrity report compositionVersion ` +
-      `'${(ctx.integrityReport as any).compositionVersion}' does not match ` +
+      `'${report.compositionVersion}' does not match ` +
       `composition compositionVersion '${c.compositionVersion}'.`
     );
+  }
+
+  // 1. Composition source binding
+  if (report.compositionSourceHash && report.compositionSourceHash !== c.sourceHash) {
+    throw new RenderError(
+      `Renderer refuses to render: integrity report compositionSourceHash ` +
+      `'${report.compositionSourceHash}' does not match ` +
+      `composition sourceHash '${c.sourceHash}'.`
+    );
+  }
+
+  // 2. Asset-level binding
+  const reportAssets: AssetIntegrityResult[] = Array.isArray(report.assets) ? report.assets : [];
+  
+  // Check visual assets
+  for (const shot of c.visualComposition.shots) {
+    const vAsset = shot.visualAsset;
+    const matched = reportAssets.find(
+      (a) =>
+        a.kind === "visual" &&
+        a.assetId === vAsset.assetId &&
+        a.assetVersionId === vAsset.assetVersionId &&
+        a.status === "OK"
+    );
+    if (!matched) {
+      throw new RenderError(
+        `Renderer refuses to render: visual asset '${vAsset.assetId}' (version '${vAsset.assetVersionId}') ` +
+        `has no OK integrity report result.`
+      );
+    }
+  }
+
+  // Check audio assets
+  for (const track of c.narrationDialogueTracks) {
+    const matched = reportAssets.find(
+      (a) => a.kind === "audio" && a.assetId === track.audioAssetId && a.status === "OK"
+    );
+    if (!matched) {
+      throw new RenderError(
+        `Renderer refuses to render: audio asset '${track.audioAssetId}' has no OK integrity report result.`
+      );
+    }
   }
 }

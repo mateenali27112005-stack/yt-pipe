@@ -84,6 +84,7 @@ export async function verifyAssetIntegrity(
     status: failures.length === 0 ? "OK" : "FAILED",
     episodeId: composition.episodeId,
     compositionVersion: composition.compositionVersion,
+    compositionSourceHash: composition.sourceHash,
     checkedAt: (options.checkedAt ?? new Date()).toISOString(),
     assets: results,
     failures,
