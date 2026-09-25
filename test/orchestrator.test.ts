@@ -168,3 +168,35 @@ test("V0.9 Orchestrator: end-to-end success", async () => {
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test("V0.9 Orchestrator: records active failed stage and resumes from it", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "v09-resume-test-"));
+  try {
+    const failingSpeechProvider = createFakeSpeechProvider(join(tmp, "audio"));
+    failingSpeechProvider.synthesize = async () => { throw new Error("simulated TTS outage"); };
+    const baseDeps: OrchestratorDependencies = {
+      speechProvider: failingSpeechProvider,
+      imageProvider: createFakeImageProvider(),
+      bible: makeBible(),
+      initialContinuityState: createInitialState("SERIES_01", makeBible()),
+      workingDirectory: tmp,
+      renderer: new FakeRenderer()
+    };
+
+    const first = await new MasterOrchestrator("run_resume", "SERIES_01", "EP_1", baseDeps).run(mockScript);
+    assert.equal(first.status, "FAILED");
+    const failedState = JSON.parse(await readFile(join(tmp, ".production-state.json"), "utf8"));
+    assert.equal(failedState.currentStage, "AUDIO_GENERATED");
+    assert.equal(failedState.activeStage, "AUDIO_GENERATED");
+    assert.ok(failedState.checkpoints.some((checkpoint: any) => checkpoint.stage === "PLANNED"));
+    assert.ok(!failedState.checkpoints.some((checkpoint: any) => checkpoint.stage === "AUDIO_GENERATED"));
+
+    const resumed = await new MasterOrchestrator("run_resume", "SERIES_01", "EP_1", {
+      ...baseDeps,
+      speechProvider: createFakeSpeechProvider(join(tmp, "audio"))
+    }).run(mockScript);
+    assert.equal(resumed.status, "READY");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});

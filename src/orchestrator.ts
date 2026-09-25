@@ -111,6 +111,7 @@ export class MasterOrchestrator {
       // 1. PARSE & PLAN
       let episodeSpec = await this.readArtifact<EpisodeSpec>("episode-spec.json");
       if (!this.hasCheckpoint("PLANNED")) {
+        await this.beginStage("PARSED");
         const { episode: parsed, findings: parserFindings } = parseStructuredMarkdown(scriptMarkdown);
         const { episode, report: compileReport } = compileEpisode(parsed, parserFindings, { seriesId: this.seriesId });
         episodeSpec = episode;
@@ -119,6 +120,7 @@ export class MasterOrchestrator {
         await this.commitCheckpoint("PARSED", episodeSpec, "episode-spec.json");
 
         // Continuity Check
+        await this.beginStage("CONTINUITY_CHECKED");
         const continuityReport = checkContinuity(episodeSpec, this.deps.initialContinuityState);
         await this.writeArtifact("continuity-report.json", continuityReport);
         await this.commitCheckpoint("CONTINUITY_CHECKED", continuityReport, "continuity-report.json");
@@ -128,6 +130,7 @@ export class MasterOrchestrator {
         }
 
         // We combine parsed/planned since compilation is synchronous and deterministic.
+        await this.beginStage("PLANNED");
         await this.commitCheckpoint("PLANNED", episodeSpec, "episode-spec.json");
       }
 
@@ -135,6 +138,7 @@ export class MasterOrchestrator {
       let audioManifest = await this.readArtifact<AudioAssetManifest>("audio-manifest.json");
       let timeline = await this.readArtifact<RealizedTimeline>("timeline.json");
       if (!this.hasCheckpoint("AUDIO_GENERATED")) {
+        await this.beginStage("AUDIO_GENERATED");
         const characterVoices: Record<string, string> = {};
         for (const char of this.deps.bible.characters) {
           characterVoices[char.id] = "onyx";
@@ -162,6 +166,7 @@ export class MasterOrchestrator {
       let visualSpec = await this.readArtifact<ShotVisualSpec>("visual-spec.json");
       let assetManifest = await this.readArtifact<AssetManifest>("asset-manifest.json");
       if (!this.hasCheckpoint("VISUALS_GENERATED")) {
+        await this.beginStage("VISUALS_GENERATED");
         const plan = createVisualPlan(episodeSpec!, timeline!, {
           profile: { styleReference: "STYLE_DARK", defaultLighting: "dramatic", defaultMood: "tense", defaultCameraIntent: "cinematic" },
           seriesBible: this.deps.bible
@@ -193,6 +198,7 @@ export class MasterOrchestrator {
       // 4. MOTION & POSTPRODUCTION
       let composition = await this.readArtifact<FinalCompositionSpec>("composition.json");
       if (!this.hasCheckpoint("RENDERED")) {
+        await this.beginStage("RENDERED");
         const motionPlan = createMotionCompositionPlan(timeline!, visualSpec!, assetManifest!);
         composition = createFinalCompositionSpec(timeline!, audioManifest!, motionPlan, assetManifest!);
         await this.writeArtifact("composition.json", composition);
@@ -217,6 +223,7 @@ export class MasterOrchestrator {
       // 5. QC
       let qcReport = await this.readArtifact<EpisodeQCReport>("qc-report.json");
       if (!this.hasCheckpoint("QC_CHECKED")) {
+        await this.beginStage("QC_CHECKED");
         qcReport = await runEpisodeQC(composition!, { assetRoot: this.deps.workingDirectory });
         await this.writeArtifact("qc-report.json", qcReport);
         await this.commitCheckpoint("QC_CHECKED", qcReport, "qc-report.json");
@@ -225,6 +232,7 @@ export class MasterOrchestrator {
       // 6. REPAIR (Loop)
       if (qcReport!.status === "FAIL" || qcReport!.status === "WARN") {
         if (!this.hasCheckpoint("REPAIRED")) {
+          await this.beginStage("REPAIRED");
           let currentQc = qcReport!;
           let repairCycles = 0;
           const MAX_CYCLES = 2;
@@ -332,11 +340,15 @@ export class MasterOrchestrator {
              throw new Error(`QC STILL FAILING after ${MAX_CYCLES} repair cycles.`);
           }
 
+          qcReport = currentQc;
           await this.commitCheckpoint("REPAIRED", currentQc, repairedArtifactPath);
         }
       }
 
       // 7. COMPLETE
+      if (!qcReport || qcReport.status !== "PASS" || !(await this.fileExists(join(this.deps.workingDirectory, "render", "output.mp4")))) {
+        throw new Error("Final review requires a present rendered output and a passing QC report.");
+      }
       this.state.status = "COMPLETED";
       this.state.currentStage = "REVIEW_READY";
       await this.saveState();
@@ -366,6 +378,12 @@ export class MasterOrchestrator {
   }
 
   // --- Checkpointing & State ---
+
+  private async beginStage(stage: ProductionStage): Promise<void> {
+    this.state.currentStage = stage;
+    this.state.activeStage = stage;
+    await this.saveState();
+  }
 
   private async commitCheckpoint(stage: ProductionStage, data: unknown, artifactPath?: string) {
     const dataHash = hashArtifact(data);

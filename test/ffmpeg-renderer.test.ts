@@ -685,6 +685,14 @@ test("23. Real FFmpeg integration test (skipped when FFmpeg/FFprobe unavailable)
 
   const env = makeEnv();
   try {
+    await execAsync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "color=c=red:s=1920x1080:r=24", "-frames:v", "1",
+      join(env.root, "assets/shot1.png")
+    ]);
+    await execAsync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16be", "-f", "aiff",
+      join(env.root, "assets/seg1.aiff")
+    ]);
     const renderer = new FFmpegRenderer(); // Default production runners
     const result = await renderer.render(COMPOSITION, env.context);
     assert.equal(result.status, "OK");
@@ -999,7 +1007,7 @@ test("32. Caption Subtitle Burn-In WebVTT generation and filter construction", a
     const result = await renderer.render(COMPOSITION, env.context);
     assert.equal(result.status, "OK");
     const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
-    assert.ok(filterArg.includes("subtitles='"), "FFmpeg filter_complex must contain subtitles burn-in filter");
+    assert.ok(filterArg.includes("subtitles=filename='"), "FFmpeg filter_complex must contain subtitles burn-in filter");
     assert.ok(filterArg.includes(".vtt"), "FFmpeg subtitles filter must target staging .vtt file");
   } finally {
     env.cleanup();
@@ -1014,7 +1022,7 @@ test("33. Staging WebVTT subtitle file is cleaned up after render", async () => 
       if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
       if (cmd === "ffmpeg") {
         const filterArg = args[args.indexOf("-filter_complex") + 1];
-        const match = filterArg.match(/subtitles='([^']+)'/);
+        const match = filterArg.match(/subtitles=filename='([^']+)'/);
         if (match) capturedVttPath = match[1];
         const stagingPath = args[args.length - 1];
         writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
@@ -2012,10 +2020,3 @@ test("52. Failure matrix: Missing audio stream in Probe output returns RenderFai
     env.cleanup();
   }
 });
-
-
-
-
-
-
-
