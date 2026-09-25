@@ -241,12 +241,30 @@ test("throws RenderError when outputPath is empty", async () => {
   );
 });
 
+test("throws RenderError when outputPath is relative", async () => {
+  const renderer = new FakeRenderer();
+  const ctx = { ...VALID_CONTEXT, outputPath: "relative/path/episode.mp4" };
+  await assert.rejects(
+    () => renderer.render(VALID_COMPOSITION, ctx),
+    (err) => err instanceof RenderError && /must be an absolute path/.test(err.message)
+  );
+});
+
 test("throws RenderError when assetRoot is empty", async () => {
   const renderer = new FakeRenderer();
   const ctx = { ...VALID_CONTEXT, assetRoot: "" };
   await assert.rejects(
     () => renderer.render(VALID_COMPOSITION, ctx),
     (err) => err instanceof RenderError && /assetRoot/.test(err.message)
+  );
+});
+
+test("throws RenderError when assetRoot is relative", async () => {
+  const renderer = new FakeRenderer();
+  const ctx = { ...VALID_CONTEXT, assetRoot: "relative/asset/root" };
+  await assert.rejects(
+    () => renderer.render(VALID_COMPOSITION, ctx),
+    (err) => err instanceof RenderError && /must be an absolute path/.test(err.message)
   );
 });
 

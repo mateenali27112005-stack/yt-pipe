@@ -21,7 +21,7 @@
  *   - cleaning up any staging output on failure
  */
 
-import { normalize, resolve } from "node:path";
+import { isAbsolute, normalize, resolve } from "node:path";
 import type { FinalCompositionSpec } from "./types.ts";
 import { RenderError } from "./renderer-types.ts";
 import type { RenderContext, RenderResult } from "./renderer-types.ts";
@@ -92,8 +92,15 @@ export function assertRenderPreconditions(
   if (typeof ctx.assetRoot !== "string" || ctx.assetRoot.trim().length === 0) {
     throw new RenderError("RenderContext.assetRoot must be a non-empty string.");
   }
+  if (!isAbsolute(ctx.assetRoot)) {
+    throw new RenderError(`RenderContext.assetRoot must be an absolute path, got: '${ctx.assetRoot}'.`);
+  }
+
   if (typeof ctx.outputPath !== "string" || ctx.outputPath.trim().length === 0) {
     throw new RenderError("RenderContext.outputPath must be a non-empty string.");
+  }
+  if (!isAbsolute(ctx.outputPath)) {
+    throw new RenderError(`RenderContext.outputPath must be an absolute path, got: '${ctx.outputPath}'.`);
   }
 
   // Output boundary check

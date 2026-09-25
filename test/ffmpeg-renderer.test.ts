@@ -112,6 +112,18 @@ const OK_INTEGRITY_REPORT: IntegrityReport = {
   failures: [],
 };
 
+const PNG_BYTES = Buffer.from(
+  "89504e470d0a1a0a0000000d494844520000000100000001080200000090" +
+  "7753de0000000c4944415408d763f8cfc00000000200019e221bc3300000" +
+  "00049454e44ae426082", "hex"
+);
+
+const AIFF_BYTES = Buffer.from(
+  "464f524d000000264149464600000016434f4d4d00010002000100000" +
+  "5dc00104d41524b0000000800000000000000005353" +
+  "4e44000000080000000000000000", "hex"
+);
+
 interface TestEnv {
   root: string;
   outputPath: string;
@@ -124,8 +136,8 @@ function makeEnv(): TestEnv {
   mkdirSync(join(root, "assets"), { recursive: true });
   mkdirSync(join(root, "output"), { recursive: true });
 
-  writeFileSync(join(root, "assets/shot1.png"), Buffer.from("fake-png-bytes"));
-  writeFileSync(join(root, "assets/seg1.aiff"), Buffer.from("fake-aiff-bytes"));
+  writeFileSync(join(root, "assets/shot1.png"), PNG_BYTES);
+  writeFileSync(join(root, "assets/seg1.aiff"), AIFF_BYTES);
 
   const outputPath = join(root, "output/episode.mp4");
   const context: RenderContext = {
