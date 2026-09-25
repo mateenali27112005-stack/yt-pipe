@@ -45,6 +45,19 @@ test("rejects mismatched audio and incomplete motion coverage", () => {
   assert.throws(() => createFinalCompositionSpec(timeline, audio, missingMotion), /does not contain shot/);
 });
 
+test("rejects malformed, duplicate, and out-of-contract motion composition shots", () => {
+  const malformedAsset = structuredClone(motion); malformedAsset.shots[0].visualAsset.sha256 = "not-a-hash";
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, malformedAsset), /invalid visual composition shot/);
+  const invalidTiming = structuredClone(motion); invalidTiming.shots[0].timing = { startSeconds: 0, endSeconds: 4, durationSeconds: 4 };
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidTiming), /does not match the RealizedTimeline timing/);
+  const duplicate = structuredClone(motion); duplicate.shots.push(structuredClone(duplicate.shots[0]));
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, duplicate), /duplicate shot/);
+  const invalidCamera = structuredClone(motion); invalidCamera.shots[0].camera.keyframes[1].offset = 0;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidCamera), /invalid visual composition shot/);
+  const invalidTransition = structuredClone(motion); invalidTransition.shots[0].transitionIn = { type: "CROSSFADE", atSeconds: 1, durationSeconds: 0 };
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidTransition), /invalid visual composition shot/);
+});
+
 test("postproduction CLI publishes a protected final composition specification", () => {
   const temp = mkdtempSync(join(tmpdir(), "postproduction-"));
   try {

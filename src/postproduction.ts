@@ -32,12 +32,41 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   const motionPlan = motion as Partial<MotionCompositionPlan>;
   if (motionPlan.schemaVersion !== "0.1" || !positiveInteger(motionPlan.motionPlanVersion) || motionPlan.episodeId !== realized.episodeId || motionPlan.sourceSpecVersion !== realized.sourceSpecVersion || motionPlan.sourceTimelineVersion !== realized.timelineVersion || !Array.isArray(motionPlan.shots)) throw new Error("MotionCompositionPlan does not match the RealizedTimeline provenance.");
   const audioById = new Map(audioManifest.assets.map(asset => [asset.id, asset]));
-  const motionShotIds = new Set(motionPlan.shots.map(shot => shot.shotId));
+  const timingByShot = new Map<string, { startSeconds: number; endSeconds: number; durationSeconds: number }>();
+  for (const segment of realized.segments) {
+    const current = timingByShot.get(segment.shotId);
+    const startSeconds = current ? Math.min(current.startSeconds, segment.startSeconds) : segment.startSeconds;
+    const endSeconds = current ? Math.max(current.endSeconds, segment.endSeconds) : segment.endSeconds;
+    timingByShot.set(segment.shotId, { startSeconds, endSeconds, durationSeconds: endSeconds - startSeconds });
+  }
+  const motionShotIds = new Set<string>();
+  let previousStart = -1;
+  for (const shot of motionPlan.shots) {
+    if (!validMotionShot(shot)) throw new Error("MotionCompositionPlan contains an invalid visual composition shot.");
+    if (motionShotIds.has(shot.shotId)) throw new Error(`MotionCompositionPlan contains duplicate shot '${shot.shotId}'.`);
+    const timelineTiming = timingByShot.get(shot.shotId);
+    if (!timelineTiming || !sameTiming(shot.timing, timelineTiming)) throw new Error(`MotionCompositionPlan shot '${shot.shotId}' does not match the RealizedTimeline timing.`);
+    if (shot.timing.startSeconds < previousStart) throw new Error("MotionCompositionPlan shots are not in realized timeline order.");
+    previousStart = shot.timing.startSeconds;
+    motionShotIds.add(shot.shotId);
+  }
   for (const segment of realized.segments) {
     const asset = audioById.get(segment.audioAssetId);
     if (!segment || !asset || asset.segmentId !== segment.id || asset.shotId !== segment.shotId || asset.role !== segment.role || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds)) throw new Error("RealizedTimeline contains an unresolved audio segment.");
     if (!motionShotIds.has(segment.shotId)) throw new Error(`MotionCompositionPlan does not contain shot '${segment.shotId}'.`);
   }
+}
+
+function validMotionShot(shot: unknown): shot is MotionCompositionPlan["shots"][number] {
+  if (!shot || typeof shot !== "object") return false;
+  const candidate = shot as MotionCompositionPlan["shots"][number];
+  if (!nonEmpty(candidate.id) || !nonEmpty(candidate.sceneId) || !nonEmpty(candidate.shotId) || !nonEmpty(candidate.sourceHash) || !/^[a-f0-9]{64}$/.test(candidate.sourceHash)) return false;
+  if (!candidate.visualAsset || ![candidate.visualAsset.assetId, candidate.visualAsset.assetVersionId, candidate.visualAsset.path].every(nonEmpty) || !/^[a-f0-9]{64}$/.test(candidate.visualAsset.sha256)) return false;
+  if (!validTiming(candidate.timing?.startSeconds, candidate.timing?.endSeconds, candidate.timing?.durationSeconds)) return false;
+  if (!candidate.camera || !nonEmpty(candidate.camera.intent) || !Array.isArray(candidate.camera.keyframes) || candidate.camera.keyframes.length !== 2) return false;
+  if (!candidate.camera.keyframes.every((keyframe, index) => keyframe && keyframe.offset === index && finitePositive(keyframe.scale) && finiteUnit(keyframe.x) && finiteUnit(keyframe.y))) return false;
+  const transition = candidate.transitionIn;
+  return !transition || (transition.atSeconds === candidate.timing.startSeconds && ((transition.type === "CUT" && transition.durationSeconds === 0) || (transition.type === "CROSSFADE" && finitePositive(transition.durationSeconds))));
 }
 
 function inferSfx(shotId: string, startSeconds: number, endSeconds: number, intent: string) {
@@ -48,4 +77,6 @@ function positiveInteger(value: unknown): value is number { return Number.isInte
 function finitePositive(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value > 0; }
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function validTiming(start: unknown, end: unknown, duration: unknown): boolean { return [start, end, duration].every(value => typeof value === "number" && Number.isFinite(value)) && (end as number) >= (start as number) && (duration as number) === (end as number) - (start as number); }
+function sameTiming(left: { startSeconds: number; endSeconds: number; durationSeconds: number }, right: { startSeconds: number; endSeconds: number; durationSeconds: number }): boolean { return left.startSeconds === right.startSeconds && left.endSeconds === right.endSeconds && left.durationSeconds === right.durationSeconds; }
+function finiteUnit(value: unknown): boolean { return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1; }
 function hash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
