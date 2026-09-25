@@ -53,7 +53,7 @@ test("rejects malformed referenced audio asset metadata", () => {
   const missingVoice = structuredClone(audio); missingVoice.assets[0].voice = "";
   assert.throws(() => createFinalCompositionSpec(timeline, missingVoice, motion), /unresolved audio segment/);
   const missingFormat = structuredClone(audio); missingFormat.assets[0].format = "" as "aiff";
-  assert.throws(() => createFinalCompositionSpec(timeline, missingFormat, motion), /unresolved audio segment/);
+  assert.throws(() => createFinalCompositionSpec(timeline, missingFormat, motion), /format must be aiff|unresolved audio segment/);
 });
 
 test("rejects malformed, duplicate, and out-of-contract motion composition shots", () => {
@@ -85,4 +85,139 @@ test("postproduction CLI publishes a protected final composition specification",
     const second = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
     assert.equal(second.status, 2); assert.match(second.stderr, /Refusing to write into existing/);
   } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+
+test("rejects zero-duration and overlapping timeline segments", () => {
+  const zeroDuration = structuredClone(timeline);
+  zeroDuration.segments[1].endSeconds = zeroDuration.segments[1].startSeconds;
+  zeroDuration.segments[1].durationSeconds = 0;
+  assert.throws(() => createFinalCompositionSpec(zeroDuration, audio, motion), /invalid timing/);
+
+  const overlap = structuredClone(timeline);
+  overlap.segments[1].startSeconds = 1;
+  overlap.segments[1].endSeconds = 3;
+  overlap.segments[1].durationSeconds = 2;
+  assert.throws(() => createFinalCompositionSpec(overlap, audio, motion), /overlapping/);
+});
+
+test("rejects timeline segments not in chronological order", () => {
+  const outOfOrder = structuredClone(timeline);
+  const temp = outOfOrder.segments[0];
+  outOfOrder.segments[0] = outOfOrder.segments[1];
+  outOfOrder.segments[1] = temp;
+  assert.throws(() => createFinalCompositionSpec(outOfOrder, audio, motion), /overlapping or not in chronological order/);
+});
+
+test("rejects duplicate timeline segment and audio asset IDs", () => {
+  const duplicateSegment = structuredClone(timeline);
+  duplicateSegment.segments[1].id = duplicateSegment.segments[0].id;
+  assert.throws(() => createFinalCompositionSpec(duplicateSegment, audio, motion), /duplicate segment IDs/);
+
+  const duplicateAudio = structuredClone(timeline);
+  duplicateAudio.segments[1].audioAssetId = duplicateAudio.segments[0].audioAssetId;
+  assert.throws(() => createFinalCompositionSpec(duplicateAudio, audio, motion), /duplicate audio asset IDs/);
+});
+
+test("rejects timeline where final endSeconds does not match totalDurationSeconds", () => {
+  const mismatch = structuredClone(timeline);
+  mismatch.totalDurationSeconds = 4;
+  assert.throws(() => createFinalCompositionSpec(mismatch, audio, motion), /does not match totalDurationSeconds/);
+});
+
+test("rejects duplicate asset and segment IDs in audio manifest", () => {
+  const duplicateAsset = structuredClone(audio);
+  duplicateAsset.assets[1].id = duplicateAsset.assets[0].id;
+  assert.throws(() => createFinalCompositionSpec(timeline, duplicateAsset, motion), /duplicate asset IDs/);
+
+  const duplicateSegment = structuredClone(audio);
+  duplicateSegment.assets[1].segmentId = duplicateSegment.assets[0].segmentId;
+  assert.throws(() => createFinalCompositionSpec(timeline, duplicateSegment, motion), /duplicate segment IDs/);
+});
+
+test("rejects invalid audio format and provider", () => {
+  const badFormat = structuredClone(audio);
+  (badFormat.assets[0] as any).format = "mp3";
+  assert.throws(() => createFinalCompositionSpec(timeline, badFormat, motion), /format must be aiff/);
+
+  const badProvider = structuredClone(audio);
+  (badProvider as any).provider = "aws-polly";
+  assert.throws(() => createFinalCompositionSpec(timeline, badProvider, motion), /provider must be macos-say/);
+});
+
+test("rejects invalid motion provenance versions", () => {
+  const badVisual = structuredClone(motion);
+  badVisual.sourceVisualSpecVersion = -1;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, badVisual), /sourceVisualSpecVersion must be positive integer/);
+
+  const badAsset = structuredClone(motion);
+  badAsset.sourceAssetManifestRevision = 0;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, badAsset), /sourceAssetManifestRevision must be positive integer/);
+});
+
+test("rejects invalid captions", () => {
+  const emptyText = structuredClone(timeline);
+  emptyText.segments[0].text = "   ";
+  assert.throws(() => createFinalCompositionSpec(emptyText, audio, motion), /text cannot be empty/);
+
+  const badRole = structuredClone(timeline);
+  (badRole.segments[0] as any).role = "unknown";
+  assert.throws(() => createFinalCompositionSpec(badRole, audio, motion), /role must be narration or dialogue/);
+
+  const missingSpeaker = structuredClone(timeline);
+  missingSpeaker.segments[1].role = "dialogue";
+  missingSpeaker.segments[1].speaker = "";
+  assert.throws(() => createFinalCompositionSpec(missingSpeaker, audio, motion), /dialogue segment must have a speaker/);
+});
+
+test("rejects invalid motion canvas", () => {
+  const missingCanvas = structuredClone(motion);
+  (missingCanvas as any).canvas = undefined;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, missingCanvas), /canvas is missing or invalid/);
+
+  const zeroWidth = structuredClone(motion);
+  zeroWidth.canvas.width = 0;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, zeroWidth), /dimensions and frameRate must be positive finite/);
+
+  const negativeHeight = structuredClone(motion);
+  negativeHeight.canvas.height = -1080;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, negativeHeight), /dimensions and frameRate must be positive finite/);
+
+  const zeroFrameRate = structuredClone(motion);
+  zeroFrameRate.canvas.frameRate = 0;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, zeroFrameRate), /dimensions and frameRate must be positive finite/);
+
+  const negativeFrameRate = structuredClone(motion);
+  negativeFrameRate.canvas.frameRate = -24;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, negativeFrameRate), /dimensions and frameRate must be positive finite/);
+
+  const nonFiniteFrameRate = structuredClone(motion);
+  nonFiniteFrameRate.canvas.frameRate = Infinity;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, nonFiniteFrameRate), /dimensions and frameRate must be positive finite/);
+});
+
+test("accepts valid fractional frameRate", () => {
+  const fractional = structuredClone(motion);
+  fractional.canvas.frameRate = 23.976;
+  const spec = createFinalCompositionSpec(timeline, audio, fractional);
+  assert.equal(spec.visualComposition.canvas.frameRate, 23.976);
+});
+
+test("postproduction CLI rejects unknown flags and missing values", () => {
+  const temp = mkdtempSync(join(tmpdir(), "postproduction-cli-bad-"));
+  try {
+    const paths = ["timeline.json", "audio.json", "motion.json"].map(name => join(temp, name));
+    [timeline, audio, motion].forEach((value, index) => writeFileSync(paths[index], JSON.stringify(value)));
+    const output = join(temp, "composition");
+
+    let res = spawnSync(process.execPath, ["--experimental-strip-types", "src/postproduction-cli.ts", ...paths, output, "--banana"], { cwd: root, encoding: "utf8" });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /Unknown flag: --banana/);
+
+    res = spawnSync(process.execPath, ["--experimental-strip-types", "src/postproduction-cli.ts", ...paths, output, "--composition-version"], { cwd: root, encoding: "utf8" });
+    assert.equal(res.status, 2);
+    assert.match(res.stderr, /Missing value for --composition-version/);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 });
