@@ -1224,5 +1224,587 @@ test("39. Real FFmpeg failure integration test on corrupted input (skipped when 
   }
 });
 
+test("40. Positive and negative narration gainDb filters applied to FFmpeg arguments", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const compWithGain: FinalCompositionSpec = {
+      ...COMPOSITION,
+      narrationDialogueTracks: [
+        {
+          id: "MIX_SEG_1",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          role: "narration",
+          startSeconds: 0,
+          endSeconds: 3,
+          gainDb: 6,
+          format: "aiff",
+          durationSeconds: 3,
+          voice: "Narrator",
+        },
+      ],
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compWithGain, env.context);
+    assert.equal(result.status, "OK");
+
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("volume=6dB"), `Filter complex should contain volume=6dB filter, got: ${filterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("41. Zero gainDb (0 dB) does not add unnecessary volume filter", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const compZeroGain: FinalCompositionSpec = {
+      ...COMPOSITION,
+      narrationDialogueTracks: [
+        {
+          id: "MIX_SEG_1",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          role: "narration",
+          startSeconds: 0,
+          endSeconds: 3,
+          gainDb: 0,
+          format: "aiff",
+          durationSeconds: 3,
+          voice: "Narrator",
+        },
+      ],
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compZeroGain, env.context);
+    assert.equal(result.status, "OK");
+
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(!filterArg.includes("volume="), `Zero gainDb should not include volume filter, got: ${filterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("42. Multiple narration tracks with independent gainDb values (+3dB, -6dB)", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const reportWithTwoAudio: IntegrityReport = {
+      ...env.integrityReport,
+      assets: [
+        ...env.integrityReport.assets,
+        {
+          kind: "audio",
+          assetId: "AST_2",
+          path: "assets/seg1.aiff",
+          resolvedPath: join(env.root, "assets/seg1.aiff"),
+          status: "OK",
+        },
+      ],
+    };
+
+    const compMultiTrack: FinalCompositionSpec = {
+      ...COMPOSITION,
+      narrationDialogueTracks: [
+        {
+          id: "MIX_SEG_1",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          role: "narration",
+          startSeconds: 0,
+          endSeconds: 1.5,
+          gainDb: 3,
+          format: "aiff",
+          durationSeconds: 1.5,
+          voice: "Narrator1",
+        },
+        {
+          id: "MIX_SEG_2",
+          audioAssetId: "AST_2",
+          path: "assets/seg1.aiff",
+          role: "dialogue",
+          startSeconds: 1.5,
+          endSeconds: 3,
+          gainDb: -6,
+          format: "aiff",
+          durationSeconds: 1.5,
+          voice: "Narrator2",
+        },
+      ],
+    };
+
+    const ctx = { ...env.context, integrityReport: reportWithTwoAudio };
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compMultiTrack, ctx);
+    assert.equal(result.status, "OK");
+
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("volume=3dB"), `Should contain volume=3dB, got: ${filterArg}`);
+    assert.ok(filterArg.includes("volume=-6dB"), `Should contain volume=-6dB, got: ${filterArg}`);
+    assert.ok(filterArg.includes("amix=inputs=2"), `Should mix 2 audio streams, got: ${filterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("43. Invalid gainDb (NaN) throws RenderError in assertRenderPreconditions", async () => {
+  const env = makeEnv();
+  try {
+    const compInvalidGain: FinalCompositionSpec = {
+      ...COMPOSITION,
+      narrationDialogueTracks: [
+        {
+          id: "MIX_SEG_1",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          role: "narration",
+          startSeconds: 0,
+          endSeconds: 3,
+          gainDb: NaN,
+          format: "aiff",
+          durationSeconds: 3,
+          voice: "Narrator",
+        },
+      ],
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    await assert.rejects(
+      () => renderer.render(compInvalidGain, env.context),
+      (err) => err instanceof RenderError && /invalid gainDb/.test(err.message)
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("44. Realized music cue (GENERATED) with verified asset is included in FFmpeg audio mix", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const musicResolvedPath = join(env.root, "assets/seg1.aiff");
+    const reportWithMusic: IntegrityReport = {
+      ...env.integrityReport,
+      assets: [
+        ...env.integrityReport.assets,
+        {
+          kind: "audio",
+          assetId: "MUS_AST_1",
+          path: "assets/seg1.aiff",
+          resolvedPath: musicResolvedPath,
+          status: "OK",
+        },
+      ],
+    };
+
+    const compWithMusic: FinalCompositionSpec = {
+      ...COMPOSITION,
+      musicCues: [
+        {
+          id: "MUS_001",
+          lifecycle: "GENERATED",
+          audioAssetId: "MUS_AST_1",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 0,
+          endSeconds: 3,
+          style: "ambient",
+          gainDb: -12,
+        } as any,
+      ],
+    };
+
+    const ctx = { ...env.context, integrityReport: reportWithMusic };
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compWithMusic, ctx);
+    assert.equal(result.status, "OK");
+
+    assert.ok(capturedArgs.includes(musicResolvedPath), "FFmpeg args should include resolvedPath of music cue");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("volume=-12dB"), `Should apply volume=-12dB to music cue stream, got: ${filterArg}`);
+    assert.ok(filterArg.includes("amix=inputs=2"), `Should mix narration and music streams, got: ${filterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("45. Realized SFX cue (GENERATED) with verified asset is included in FFmpeg audio mix", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const sfxResolvedPath = join(env.root, "assets/seg1.aiff");
+    const reportWithSfx: IntegrityReport = {
+      ...env.integrityReport,
+      assets: [
+        ...env.integrityReport.assets,
+        {
+          kind: "audio",
+          assetId: "SFX_AST_1",
+          path: "assets/seg1.aiff",
+          resolvedPath: sfxResolvedPath,
+          status: "OK",
+        },
+      ],
+    };
+
+    const compWithSfx: FinalCompositionSpec = {
+      ...COMPOSITION,
+      sfxCues: [
+        {
+          id: "SFX_001",
+          lifecycle: "GENERATED",
+          shotId: "SH_001",
+          audioAssetId: "SFX_AST_1",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 0.5,
+          endSeconds: 1.5,
+          description: "woosh",
+          gainDb: -6,
+        } as any,
+      ],
+    };
+
+    const ctx = { ...env.context, integrityReport: reportWithSfx };
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compWithSfx, ctx);
+    assert.equal(result.status, "OK");
+
+    assert.ok(capturedArgs.includes(sfxResolvedPath), "FFmpeg args should include resolvedPath of SFX cue");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("adelay=500|500"), `Should delay SFX cue by 500ms, got: ${filterArg}`);
+    assert.ok(filterArg.includes("volume=-6dB"), `Should apply volume=-6dB to SFX cue stream, got: ${filterArg}`);
+    assert.ok(filterArg.includes("amix=inputs=2"), `Should mix narration and SFX streams, got: ${filterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("46. Full end-to-end composition with camera motion, CROSSFADE transition, narration, music, SFX, and captions", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const fullReport: IntegrityReport = {
+      ...env.integrityReport,
+      assets: [
+        {
+          kind: "visual",
+          assetId: "VAS_1",
+          assetVersionId: "VAS_1_v1",
+          path: "assets/shot1.png",
+          resolvedPath: join(env.root, "assets/shot1.png"),
+          status: "OK",
+        },
+        {
+          kind: "visual",
+          assetId: "VAS_2",
+          assetVersionId: "VAS_2_v1",
+          path: "assets/shot1.png",
+          resolvedPath: join(env.root, "assets/shot1.png"),
+          status: "OK",
+        },
+        {
+          kind: "audio",
+          assetId: "AST_1",
+          path: "assets/seg1.aiff",
+          resolvedPath: join(env.root, "assets/seg1.aiff"),
+          status: "OK",
+        },
+        {
+          kind: "audio",
+          assetId: "MUS_AST_1",
+          path: "assets/seg1.aiff",
+          resolvedPath: join(env.root, "assets/seg1.aiff"),
+          status: "OK",
+        },
+        {
+          kind: "audio",
+          assetId: "SFX_AST_1",
+          path: "assets/seg1.aiff",
+          resolvedPath: join(env.root, "assets/seg1.aiff"),
+          status: "OK",
+        },
+      ],
+    };
+
+    const fullComposition: FinalCompositionSpec = {
+      ...COMPOSITION,
+      durationSeconds: 5,
+      visualComposition: {
+        canvas: { width: 1920, height: 1080, frameRate: 24 },
+        shots: [
+          {
+            id: "MCP_SH_001",
+            sceneId: "SC_001",
+            shotId: "SH_001",
+            visualAsset: {
+              assetId: "VAS_1",
+              assetVersionId: "VAS_1_v1",
+              path: "assets/shot1.png",
+              sha256: "a".repeat(64),
+            },
+            timing: { startSeconds: 0, endSeconds: 3, durationSeconds: 3 },
+            camera: {
+              intent: "slow push-in",
+              keyframes: [
+                { offset: 0, scale: 1, x: 0.5, y: 0.5 },
+                { offset: 1, scale: 1.1, x: 0.5, y: 0.5 },
+              ],
+            },
+            sourceHash: "b".repeat(64),
+          },
+          {
+            id: "MCP_SH_002",
+            sceneId: "SC_001",
+            shotId: "SH_002",
+            visualAsset: {
+              assetId: "VAS_2",
+              assetVersionId: "VAS_2_v1",
+              path: "assets/shot1.png",
+              sha256: "a".repeat(64),
+            },
+            timing: { startSeconds: 3, endSeconds: 5, durationSeconds: 2 },
+            camera: {
+              intent: "static",
+              keyframes: [
+                { offset: 0, scale: 1, x: 0.5, y: 0.5 },
+                { offset: 1, scale: 1, x: 0.5, y: 0.5 },
+              ],
+            },
+            transitionIn: { type: "CROSSFADE", atSeconds: 3, durationSeconds: 0.5 },
+            sourceHash: "b".repeat(64),
+          },
+        ],
+      },
+      narrationDialogueTracks: [
+        {
+          id: "MIX_SEG_1",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          role: "narration",
+          startSeconds: 0,
+          endSeconds: 5,
+          gainDb: 2,
+          format: "aiff",
+          durationSeconds: 5,
+          voice: "Narrator",
+        },
+      ],
+      musicCues: [
+        {
+          id: "MUS_001",
+          lifecycle: "GENERATED",
+          audioAssetId: "MUS_AST_1",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 0,
+          endSeconds: 5,
+          style: "cinematic",
+          gainDb: -14,
+        } as any,
+      ],
+      sfxCues: [
+        {
+          id: "SFX_001",
+          lifecycle: "GENERATED",
+          shotId: "SH_002",
+          audioAssetId: "SFX_AST_1",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 3,
+          endSeconds: 4,
+          description: "transition swell",
+          gainDb: -8,
+        } as any,
+      ],
+      captions: [
+        { id: "CAP_1", role: "narration", speaker: "Narrator", text: "Welcome to the story.", startSeconds: 0, endSeconds: 3 },
+        { id: "CAP_2", role: "narration", speaker: "Narrator", text: "Chapter one begins.", startSeconds: 3, endSeconds: 5 },
+      ],
+    };
+
+    const ctx = { ...env.context, integrityReport: fullReport };
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner({ durationSeconds: 5 }),
+    });
+
+    const result = await renderer.render(fullComposition, ctx);
+    assert.equal(result.status, "OK");
+
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+
+    // Check zoompan keyframe interpolation
+    assert.ok(filterArg.includes("zoompan="), `Filter graph should include zoompan, got: ${filterArg}`);
+    // Check xfade crossfade transition
+    assert.ok(filterArg.includes("xfade=transition=fade:duration=0.5"), `Filter graph should include xfade crossfade, got: ${filterArg}`);
+    // Check subtitles caption burn-in
+    assert.ok(filterArg.includes("subtitles="), `Filter graph should include subtitles filter, got: ${filterArg}`);
+    // Check narration + music + sfx volume filters & 3-input amix
+    assert.ok(filterArg.includes("volume=2dB"), `Filter graph should include narration volume, got: ${filterArg}`);
+    assert.ok(filterArg.includes("volume=-14dB"), `Filter graph should include music volume, got: ${filterArg}`);
+    assert.ok(filterArg.includes("volume=-8dB"), `Filter graph should include SFX volume, got: ${filterArg}`);
+    assert.ok(filterArg.includes("amix=inputs=3"), `Filter graph should mix 3 audio streams, got: ${filterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("47. Precondition violation on full composition fails closed without modifying target", async () => {
+  const env = makeEnv();
+  try {
+    writeFileSync(env.outputPath, Buffer.from("original-target-file"));
+
+    const badComposition = { ...COMPOSITION, episodeId: "" };
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    await assert.rejects(
+      () => renderer.render(badComposition, env.context),
+      (err) => err instanceof RenderError
+    );
+
+    assert.equal(
+      readFileSync(env.outputPath, "utf8"),
+      "original-target-file",
+      "Original target file must remain untouched"
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("48. FFprobe verification failure on full composition cleans staging and leaves target output untouched", async () => {
+  const env = makeEnv();
+  try {
+    writeFileSync(env.outputPath, Buffer.from("protected-output-bytes"));
+
+    const failingProbeRunner: ProbeRunner = async () => {
+      return {
+        formatName: "mov,mp4,m4a,3gp,3g2,mj2",
+        durationSeconds: 10, // Mismatch duration (composition is 3s)
+        videoStream: { codecName: "h264", width: 1920, height: 1080, rFrameRate: "24/1" },
+        audioStream: { codecName: "aac", channels: 2, sampleRate: 44100 },
+      };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: failingProbeRunner,
+    });
+
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "FAILED");
+    assert.ok(/duration mismatch/.test(result.reason), `Expected duration mismatch error, got: ${result.reason}`);
+    assert.equal(
+      readFileSync(env.outputPath, "utf8"),
+      "protected-output-bytes",
+      "Target output file must remain untouched after probe failure"
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+
+
+
 
 

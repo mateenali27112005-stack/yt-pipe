@@ -166,6 +166,12 @@ export function assertRenderPreconditions(
 
   // Check audio assets (narration / dialogue)
   for (const track of c.narrationDialogueTracks) {
+    if (typeof track.gainDb !== "number" || !Number.isFinite(track.gainDb)) {
+      throw new RenderError(
+        `Renderer refuses to render: narration/dialogue track '${track.id}' has invalid gainDb '${(track as any).gainDb}'. ` +
+        "gainDb must be a finite number."
+      );
+    }
     const matched = reportAssets.find(
       (a) => a.kind === "audio" && a.assetId === track.audioAssetId && a.status === "OK"
     );
