@@ -244,12 +244,71 @@ export class MasterOrchestrator {
               break; // Only SKIPs left, we can proceed
             }
 
-            // Execute repairs (We'd need real repairers here, using placeholders for now)
+            // Repairers share the active manifests and composition; serialize mutations.
+            let repairTail = Promise.resolve();
+            const withRepairLock = async <T>(operation: () => Promise<T>): Promise<T> => {
+              const previous = repairTail;
+              let release!: () => void;
+              repairTail = new Promise<void>(resolve => { release = resolve; });
+              await previous;
+              try { return await operation(); } finally { release(); }
+            };
+
             const repairReport = await executeRepairs(decisions, {
               composition: composition!,
-              // visualRepairer: ...
-              // audioRepairer: ...
+              assetRoot: this.deps.workingDirectory,
+              visualRepairer: {
+                repairVisual: (shotId) => withRepairLock(async () => {
+                  const shot = composition!.visualComposition.shots.find(candidate => candidate.shotId === shotId);
+                  const asset = assetManifest!.assets.find(candidate => candidate.shotId === shotId);
+                  if (!shot || !asset) throw new Error(`Cannot repair visual asset for shot '${shotId}'.`);
+                  assetManifest = await generateVisualAsset(visualSpec!, assetManifest!, asset.id, {
+                    provider: this.deps.imageProvider,
+                    seriesBible: this.deps.bible,
+                    outputDirectory: join(this.deps.workingDirectory, "assets")
+                  });
+                  const active = assetManifest.assets.find(candidate => candidate.id === asset.id)?.versions.find(version => version.id === assetManifest!.assets.find(candidate => candidate.id === asset.id)!.activeVersionId);
+                  if (!active?.output) throw new Error(`Repaired visual asset '${asset.id}' has no output.`);
+                  shot.visualAsset.path = active.output.path;
+                  shot.visualAsset.sha256 = active.output.sha256;
+                  await this.writeArtifact("asset-manifest.json", assetManifest);
+                  return { sha256: active.output.sha256, byteLength: active.output.byteLength };
+                })
+              },
+              audioRepairer: {
+                repairAudio: (shotId, audioPath, text) => withRepairLock(async () => {
+                  const track = composition!.narrationDialogueTracks.find(candidate => candidate.path === audioPath || candidate.id.includes(shotId));
+                  if (!track) throw new Error(`Cannot repair audio track for shot '${shotId}'.`);
+                  await this.deps.speechProvider.synthesize(text, track.voice, audioPath);
+                  const durationSeconds = await this.deps.speechProvider.measureDuration(audioPath);
+                  track.durationSeconds = durationSeconds;
+                  track.endSeconds = track.startSeconds + durationSeconds;
+                  const audioAsset = audioManifest!.assets.find(asset => asset.id === track.audioAssetId);
+                  if (audioAsset) audioAsset.durationSeconds = durationSeconds;
+                  const segment = timeline!.segments.find(candidate => candidate.audioAssetId === track.audioAssetId);
+                  if (segment) {
+                    segment.durationSeconds = durationSeconds;
+                    segment.endSeconds = segment.startSeconds + durationSeconds;
+                  }
+                  await this.writeArtifact("audio-manifest.json", audioManifest);
+                  await this.writeArtifact("timeline.json", timeline);
+                  return { durationSeconds };
+                })
+              }
             });
+
+            await this.writeArtifact("composition.json", composition);
+            const rerendered = await executeRenderPipeline({
+              compositionPath: join(this.deps.workingDirectory, "composition.json"),
+              audioManifestPath: join(this.deps.workingDirectory, "audio-manifest.json"),
+              assetManifestPath: join(this.deps.workingDirectory, "asset-manifest.json"),
+              outputPath: join(this.deps.workingDirectory, "render", "output.mp4"),
+              assetRoot: this.deps.workingDirectory,
+              overwrite: true,
+              renderer: this.deps.renderer
+            });
+            if (rerendered.status !== "OK") throw new Error(`Rendering after repair failed: ${rerendered.renderResult.reason}`);
+            await this.writeArtifact("render-report.json", rerendered);
             await this.writeArtifact(`repair-report-${repairCycles}.json`, repairReport);
 
             this.logCost({

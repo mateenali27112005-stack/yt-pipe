@@ -7,6 +7,7 @@
  */
 
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import { MasterOrchestrator } from "./orchestrator.ts";
 import { createOpenAiSpeechProvider } from "./providers/openai-tts.ts";
@@ -59,7 +60,7 @@ export async function runOrchestratorCli(argv: string[]): Promise<number> {
   }
 }
 
-if (require.main === module) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   runOrchestratorCli(process.argv)
     .then((code) => process.exit(code))
     .catch((err) => {

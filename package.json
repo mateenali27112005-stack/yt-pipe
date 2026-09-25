@@ -13,6 +13,7 @@
     "motion-plan": "node --experimental-strip-types src/motion-cli.ts",
     "postproduction-plan": "node --experimental-strip-types src/postproduction-cli.ts",
     "render": "node --experimental-strip-types src/render-cli.ts",
+    "orchestrate": "node --experimental-strip-types src/orchestrator-cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "engines": {
