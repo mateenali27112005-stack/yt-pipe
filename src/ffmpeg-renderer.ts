@@ -551,7 +551,7 @@ export class FFmpegRenderer implements Renderer {
       const escapedSubPath = stagingSubPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
       const subTag = "[v_subtitles]";
       filterParts.push(
-        `${currentAccTag}subtitles='${escapedSubPath}':force_style='FontSize=20,PrimaryColour=&H00FFFFFF,BackColour=&H80000000,BorderStyle=4,Alignment=2'${subTag}`
+        `${currentAccTag}subtitles=filename='${escapedSubPath}'${subTag}`
       );
       finalVideoTag = subTag;
     }
@@ -643,4 +643,3 @@ export class FFmpegRenderer implements Renderer {
     }
   }
 }
-
