@@ -92,11 +92,38 @@ const PNG_BYTES = Buffer.from(
   "00049454e44ae426082", "hex"
 );
 
-const AIFF_BYTES = Buffer.from(
-  "464f524d000000264149464600000016434f4d4d00010002000100000" +
-  "5dc00104d41524b0000000800000000000000005353" +
-  "4e44000000080000000000000000", "hex"
-);
+function makeValidAiffBuffer(durationSec = 3, sampleRate = 44100): Buffer {
+  const numFrames = Math.round(durationSec * sampleRate);
+  const pcmDataSize = numFrames * 2;
+  const ssndChunkSize = 8 + pcmDataSize;
+  const commChunkSize = 18;
+  const formPayloadSize = 4 + (8 + commChunkSize) + (8 + ssndChunkSize);
+
+  const buf = Buffer.alloc(8 + formPayloadSize);
+  let offset = 0;
+
+  buf.write("FORM", offset); offset += 4;
+  buf.writeUInt32BE(formPayloadSize, offset); offset += 4;
+  buf.write("AIFF", offset); offset += 4;
+
+  buf.write("COMM", offset); offset += 4;
+  buf.writeUInt32BE(commChunkSize, offset); offset += 4;
+  buf.writeUInt16BE(1, offset); offset += 2;
+  buf.writeUInt32BE(numFrames, offset); offset += 4;
+  buf.writeUInt16BE(16, offset); offset += 2;
+  const sampleRate80Bit = Buffer.from([0x40, 0x0e, 0xac, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  sampleRate80Bit.copy(buf, offset); offset += 10;
+
+  buf.write("SSND", offset); offset += 4;
+  buf.writeUInt32BE(ssndChunkSize, offset); offset += 4;
+  buf.writeUInt32BE(0, offset); offset += 4;
+  buf.writeUInt32BE(0, offset); offset += 4;
+
+  return buf;
+}
+
+const AIFF_BYTES = makeValidAiffBuffer(3);
+
 
 /**
  * Build an integrity report where resolvedPaths point to the actual temp dir
@@ -1131,5 +1158,71 @@ test("37. Renderer must not return OK when resolvedPath is empty for a visual as
     env.cleanup();
   }
 });
+
+test("38. Subprocess timeout causes render to return RenderFailure and cleanup staging", async () => {
+  const env = makeEnv();
+  try {
+    writeFileSync(env.outputPath, Buffer.from("existing-target-content"));
+
+    const hangingProcessRunner: ProcessRunner = async (cmd, args, options) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: `Subprocess execution timed out after ${options?.timeoutMs ?? 50}ms (killed with SIGKILL)`,
+      };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner: hangingProcessRunner,
+      probeRunner: makeFakeProbeRunner(),
+      processTimeoutMs: 50,
+    });
+
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "FAILED");
+    assert.ok(/timed out/.test(result.reason), `Expected timeout message in failure reason, got: ${result.reason}`);
+    assert.equal(
+      readFileSync(env.outputPath, "utf8"),
+      "existing-target-content",
+      "Existing target file must remain unchanged on timeout"
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("39. Real FFmpeg failure integration test on corrupted input (skipped when FFmpeg/FFprobe unavailable)", async (t) => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execAsync = promisify(execFile);
+
+  let ffmpegAvailable = false;
+  try {
+    await execAsync("ffmpeg", ["-version"]);
+    await execAsync("ffprobe", ["-version"]);
+    ffmpegAvailable = true;
+  } catch {
+    ffmpegAvailable = false;
+  }
+
+  if (!ffmpegAvailable) {
+    t.skip("Real FFmpeg/FFprobe binaries not available on system — skipping integration test");
+    return;
+  }
+
+  const env = makeEnv();
+  try {
+    writeFileSync(join(env.root, "assets/shot1.png"), Buffer.from("CORRUPTED_NOT_A_PNG_FILE_DATA"));
+
+    const renderer = new FFmpegRenderer({ processTimeoutMs: 2000 });
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "FAILED");
+    assert.equal(existsSync(env.outputPath), false, "Target output must not be published on rendering failure");
+  } finally {
+    env.cleanup();
+  }
+});
+
 
 

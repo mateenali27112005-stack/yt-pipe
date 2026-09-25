@@ -50,10 +50,17 @@ export interface ProcessResult {
   stderr: string;
 }
 
+export interface ProcessOptions {
+  cwd?: string;
+  timeoutMs?: number;
+  maxBufferBytes?: number;
+  killSignal?: NodeJS.Signals | number;
+}
+
 export type ProcessRunner = (
   command: string,
   args: string[],
-  options?: { cwd?: string }
+  options?: ProcessOptions
 ) => Promise<ProcessResult>;
 
 export interface VideoStreamInfo {
@@ -76,27 +83,43 @@ export interface ProbeResult {
   audioStream?: AudioStreamInfo;
 }
 
-export type ProbeRunner = (filePath: string) => Promise<ProbeResult>;
+export type ProbeRunner = (filePath: string, options?: ProcessOptions) => Promise<ProbeResult>;
 
-/** Production process runner using child_process.execFile */
+/** Production process runner using child_process.execFile with timeout and maxBuffer bounds */
 export const defaultProcessRunner: ProcessRunner = async (command, args, options) => {
+  const timeout = options?.timeoutMs ?? 30000;
+  const maxBuffer = options?.maxBufferBytes ?? 10 * 1024 * 1024;
+  const killSignal = options?.killSignal ?? "SIGKILL";
+
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
       cwd: options?.cwd,
       encoding: "utf8",
+      timeout,
+      maxBuffer,
+      killSignal,
     });
     return { exitCode: 0, stdout: stdout ?? "", stderr: stderr ?? "" };
   } catch (err: any) {
+    const isTimeout = err.killed && (err.signal === killSignal || err.code === "ETIMEDOUT");
+    const isMaxBuffer = err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+    let stderrMsg = err.stderr ?? err.message ?? "Process execution failed";
+    if (isTimeout) {
+      stderrMsg = `Subprocess execution timed out after ${timeout}ms (killed with ${killSignal}): ${stderrMsg}`;
+    } else if (isMaxBuffer) {
+      stderrMsg = `Subprocess output buffer exceeded maxBuffer limit (${maxBuffer} bytes): ${stderrMsg}`;
+    }
     return {
       exitCode: typeof err.code === "number" ? err.code : 1,
       stdout: err.stdout ?? "",
-      stderr: err.stderr ?? err.message ?? "",
+      stderr: stderrMsg,
     };
   }
 };
 
-/** Production probe runner using ffprobe JSON output */
-export const defaultProbeRunner: ProbeRunner = async (filePath) => {
+/** Production probe runner using ffprobe JSON output with timeout protection */
+export const defaultProbeRunner: ProbeRunner = async (filePath, options) => {
+  const timeoutMs = options?.timeoutMs ?? 10000;
   const args = [
     "-v",
     "quiet",
@@ -106,9 +129,12 @@ export const defaultProbeRunner: ProbeRunner = async (filePath) => {
     "-show_streams",
     filePath,
   ];
-  const { exitCode, stdout } = await defaultProcessRunner("ffprobe", args);
+  const { exitCode, stdout, stderr } = await defaultProcessRunner("ffprobe", args, {
+    ...options,
+    timeoutMs,
+  });
   if (exitCode !== 0 || !stdout) {
-    throw new Error(`FFprobe failed on file: ${filePath}`);
+    throw new Error(`FFprobe failed on file: ${filePath} (${stderr || "exit code " + exitCode})`);
   }
   const parsed = JSON.parse(stdout);
   const format = parsed.format ?? {};
@@ -155,6 +181,12 @@ export interface FFmpegRendererOptions {
   ffprobePath?: string;
   /** Allowed duration mismatch tolerance in seconds between composition and rendered file (default: 0.5s) */
   durationToleranceSeconds?: number;
+  /** Timeout in milliseconds for FFmpeg process execution (default: 30000ms) */
+  processTimeoutMs?: number;
+  /** Timeout in milliseconds for FFprobe probing execution (default: 10000ms) */
+  probeTimeoutMs?: number;
+  /** Maximum stdout/stderr buffer size in bytes for subprocesses (default: 10MB) */
+  maxBufferBytes?: number;
 }
 
 export class FFmpegRenderer implements Renderer {
@@ -164,6 +196,9 @@ export class FFmpegRenderer implements Renderer {
   private readonly ffmpegPath: string;
   private readonly ffprobePath: string;
   private readonly durationTolerance: number;
+  private readonly processTimeoutMs: number;
+  private readonly probeTimeoutMs: number;
+  private readonly maxBufferBytes: number;
 
   constructor(options: FFmpegRendererOptions = {}) {
     this.processRunner = options.processRunner ?? defaultProcessRunner;
@@ -171,6 +206,9 @@ export class FFmpegRenderer implements Renderer {
     this.ffmpegPath = options.ffmpegPath ?? "ffmpeg";
     this.ffprobePath = options.ffprobePath ?? "ffprobe";
     this.durationTolerance = options.durationToleranceSeconds ?? 0.5;
+    this.processTimeoutMs = options.processTimeoutMs ?? 30000;
+    this.probeTimeoutMs = options.probeTimeoutMs ?? 10000;
+    this.maxBufferBytes = options.maxBufferBytes ?? 10 * 1024 * 1024;
   }
 
   async render(composition: FinalCompositionSpec, context: RenderContext): Promise<RenderResult> {
@@ -180,15 +218,24 @@ export class FFmpegRenderer implements Renderer {
     const normalizedOutput = normalize(resolve(context.outputPath));
     const normalizedRoot = normalize(resolve(context.assetRoot));
 
+    const procOptions: ProcessOptions = {
+      timeoutMs: this.processTimeoutMs,
+      maxBufferBytes: this.maxBufferBytes,
+    };
+    const probeOptions: ProcessOptions = {
+      timeoutMs: this.probeTimeoutMs,
+      maxBufferBytes: this.maxBufferBytes,
+    };
+
     // 2. Verify binary availability
-    const ffmpegCheck = await this.processRunner(this.ffmpegPath, ["-version"]);
+    const ffmpegCheck = await this.processRunner(this.ffmpegPath, ["-version"], procOptions);
     if (ffmpegCheck.exitCode !== 0) {
       return {
         status: "FAILED",
         reason: `FFmpeg executable '${this.ffmpegPath}' is unavailable or failed execution check.`,
       };
     }
-    const ffprobeCheck = await this.processRunner(this.ffprobePath, ["-version"]);
+    const ffprobeCheck = await this.processRunner(this.ffprobePath, ["-version"], probeOptions);
     if (ffprobeCheck.exitCode !== 0) {
       return {
         status: "FAILED",
@@ -220,13 +267,16 @@ export class FFmpegRenderer implements Renderer {
       );
 
       // 6. Execute FFmpeg
-      const renderProc = await this.processRunner(this.ffmpegPath, ffmpegArgs);
+      const renderProc = await this.processRunner(this.ffmpegPath, ffmpegArgs, procOptions);
       if (renderProc.exitCode !== 0) {
         await this.safeRemove(stagingOutput);
         await this.safeRemove(stagingSubPath);
+        const reasonMsg = renderProc.stderr.includes("timed out")
+          ? renderProc.stderr
+          : `FFmpeg process exited with code ${renderProc.exitCode}: ${renderProc.stderr || renderProc.stdout}`;
         return {
           status: "FAILED",
-          reason: `FFmpeg process exited with code ${renderProc.exitCode}: ${renderProc.stderr || renderProc.stdout}`,
+          reason: reasonMsg,
         };
       }
 
@@ -255,7 +305,7 @@ export class FFmpegRenderer implements Renderer {
       // Probe rendered output
       let probed: ProbeResult;
       try {
-        probed = await this.probeRunner(stagingOutput);
+        probed = await this.probeRunner(stagingOutput, probeOptions);
       } catch (err: any) {
         await this.safeRemove(stagingOutput);
         await this.safeRemove(stagingSubPath);

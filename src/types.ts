@@ -294,8 +294,8 @@ export interface FinalCompositionSpec {
     shots: MotionCompositionPlan["shots"];
   };
   narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number; format: string; durationSeconds: number; voice: string }>;
-  musicCues: Array<{ id: string; lifecycle: "PLANNED" | "GENERATED"; startSeconds: number; endSeconds: number; style: string; gainDb: number; audioAssetId?: string; path?: string; format?: string; durationSeconds?: number }>;
-  sfxCues: Array<{ id: string; lifecycle: "PLANNED" | "GENERATED"; shotId: string; startSeconds: number; endSeconds: number; description: string; gainDb: number; audioAssetId?: string; path?: string; format?: string; durationSeconds?: number }>;
+  musicCues: Array<{ id: string; lifecycle: "PLANNED"; startSeconds: number; endSeconds: number; style: string; gainDb: number }>;
+  sfxCues: Array<{ id: string; lifecycle: "PLANNED"; shotId: string; startSeconds: number; endSeconds: number; description: string; gainDb: number }>;
   captions: Array<{ id: string; role: "narration" | "dialogue"; speaker?: string; text: string; startSeconds: number; endSeconds: number }>;
   sourceHash: string;
 }
