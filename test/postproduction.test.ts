@@ -45,6 +45,17 @@ test("rejects mismatched audio and incomplete motion coverage", () => {
   assert.throws(() => createFinalCompositionSpec(timeline, audio, missingMotion), /does not contain shot/);
 });
 
+test("rejects malformed referenced audio asset metadata", () => {
+  const emptyPath = structuredClone(audio); emptyPath.assets[0].path = "";
+  assert.throws(() => createFinalCompositionSpec(timeline, emptyPath, motion), /unresolved audio segment/);
+  const invalidDuration = structuredClone(audio); invalidDuration.assets[0].durationSeconds = -1;
+  assert.throws(() => createFinalCompositionSpec(timeline, invalidDuration, motion), /unresolved audio segment/);
+  const missingVoice = structuredClone(audio); missingVoice.assets[0].voice = "";
+  assert.throws(() => createFinalCompositionSpec(timeline, missingVoice, motion), /unresolved audio segment/);
+  const missingFormat = structuredClone(audio); missingFormat.assets[0].format = "" as "aiff";
+  assert.throws(() => createFinalCompositionSpec(timeline, missingFormat, motion), /unresolved audio segment/);
+});
+
 test("rejects malformed, duplicate, and out-of-contract motion composition shots", () => {
   const malformedAsset = structuredClone(motion); malformedAsset.shots[0].visualAsset.sha256 = "not-a-hash";
   assert.throws(() => createFinalCompositionSpec(timeline, audio, malformedAsset), /invalid visual composition shot/);
@@ -56,6 +67,8 @@ test("rejects malformed, duplicate, and out-of-contract motion composition shots
   assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidCamera), /invalid visual composition shot/);
   const invalidTransition = structuredClone(motion); invalidTransition.shots[0].transitionIn = { type: "CROSSFADE", atSeconds: 1, durationSeconds: 0 };
   assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidTransition), /invalid visual composition shot/);
+  const longCrossfade = structuredClone(motion); longCrossfade.shots[0].transitionIn = { type: "CROSSFADE", atSeconds: 0, durationSeconds: 0.8 };
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, longCrossfade), /invalid visual composition shot/);
 });
 
 test("postproduction CLI publishes a protected final composition specification", () => {

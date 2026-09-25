@@ -52,7 +52,7 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   }
   for (const segment of realized.segments) {
     const asset = audioById.get(segment.audioAssetId);
-    if (!segment || !asset || asset.segmentId !== segment.id || asset.shotId !== segment.shotId || asset.role !== segment.role || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds)) throw new Error("RealizedTimeline contains an unresolved audio segment.");
+    if (!segment || !validAudioAsset(asset, segment) || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds)) throw new Error("RealizedTimeline contains an unresolved audio segment.");
     if (!motionShotIds.has(segment.shotId)) throw new Error(`MotionCompositionPlan does not contain shot '${segment.shotId}'.`);
   }
 }
@@ -66,7 +66,11 @@ function validMotionShot(shot: unknown): shot is MotionCompositionPlan["shots"][
   if (!candidate.camera || !nonEmpty(candidate.camera.intent) || !Array.isArray(candidate.camera.keyframes) || candidate.camera.keyframes.length !== 2) return false;
   if (!candidate.camera.keyframes.every((keyframe, index) => keyframe && keyframe.offset === index && finitePositive(keyframe.scale) && finiteUnit(keyframe.x) && finiteUnit(keyframe.y))) return false;
   const transition = candidate.transitionIn;
-  return !transition || (transition.atSeconds === candidate.timing.startSeconds && ((transition.type === "CUT" && transition.durationSeconds === 0) || (transition.type === "CROSSFADE" && finitePositive(transition.durationSeconds))));
+  return !transition || (transition.atSeconds === candidate.timing.startSeconds && ((transition.type === "CUT" && transition.durationSeconds === 0) || (transition.type === "CROSSFADE" && finitePositive(transition.durationSeconds) && transition.durationSeconds <= Math.min(0.35, candidate.timing.durationSeconds / 4))));
+}
+
+function validAudioAsset(asset: AudioAssetManifest["assets"][number] | undefined, segment: RealizedTimeline["segments"][number]): boolean {
+  return Boolean(asset && nonEmpty(asset.id) && asset.segmentId === segment.id && asset.shotId === segment.shotId && asset.role === segment.role && nonEmpty(asset.voice) && nonEmpty(asset.path) && nonEmpty(asset.format) && finitePositive(asset.durationSeconds));
 }
 
 function inferSfx(shotId: string, startSeconds: number, endSeconds: number, intent: string) {
