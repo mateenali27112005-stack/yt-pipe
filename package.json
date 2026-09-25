@@ -12,6 +12,7 @@
     "visual-generate": "node --experimental-strip-types src/image-cli.ts",
     "motion-plan": "node --experimental-strip-types src/motion-cli.ts",
     "postproduction-plan": "node --experimental-strip-types src/postproduction-cli.ts",
+    "orchestrate": "node --experimental-strip-types src/orchestrator-cli.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "engines": {
