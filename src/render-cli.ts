@@ -48,7 +48,7 @@ export async function runRenderCli(argv: string[]): Promise<number> {
         }
       } else {
         console.error(`Error: Unknown flag '${arg}'.`);
-        printUsage();
+        printUsage("stderr");
         return 1;
       }
     } else {
@@ -58,7 +58,7 @@ export async function runRenderCli(argv: string[]): Promise<number> {
 
   if (positional.length !== 5) {
     console.error("Error: Expected exactly 5 positional arguments.");
-    printUsage();
+    printUsage("stderr");
     return 1;
   }
 
@@ -102,8 +102,9 @@ export async function runRenderCli(argv: string[]): Promise<number> {
   }
 }
 
-function printUsage(): void {
-  console.log(`
+function printUsage(stream: "stdout" | "stderr" = "stderr"): void {
+  const out = stream === "stderr" ? console.error : console.log;
+  out(`
 V0.8 Render CLI Usage:
   render-cli <compositionPath> <audioManifestPath> <assetManifestPath> <assetRoot> <outputPath> [--overwrite] [--report-out <path>]
 `);
