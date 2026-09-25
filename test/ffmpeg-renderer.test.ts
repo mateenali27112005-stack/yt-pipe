@@ -86,32 +86,6 @@ const COMPOSITION: FinalCompositionSpec = {
   sourceHash: "d".repeat(64),
 };
 
-const OK_INTEGRITY_REPORT: IntegrityReport = {
-  status: "OK",
-  episodeId: "EP_001",
-  compositionVersion: 1,
-  compositionSourceHash: "d".repeat(64),
-  checkedAt: "2026-09-25T10:00:00.000Z",
-  assets: [
-    {
-      kind: "visual",
-      assetId: "VAS_1",
-      assetVersionId: "VAS_1_v1",
-      path: "assets/shot1.png",
-      resolvedPath: "/tmp/assets/assets/shot1.png",
-      status: "OK",
-    },
-    {
-      kind: "audio",
-      assetId: "AST_1",
-      path: "assets/seg1.aiff",
-      resolvedPath: "/tmp/assets/assets/seg1.aiff",
-      status: "OK",
-    },
-  ],
-  failures: [],
-};
-
 const PNG_BYTES = Buffer.from(
   "89504e470d0a1a0a0000000d494844520000000100000001080200000090" +
   "7753de0000000c4944415408d763f8cfc00000000200019e221bc3300000" +
@@ -124,10 +98,46 @@ const AIFF_BYTES = Buffer.from(
   "4e44000000080000000000000000", "hex"
 );
 
+/**
+ * Build an integrity report where resolvedPaths point to the actual temp dir
+ * created by makeEnv(). Must be called after makeEnv() creates the root.
+ */
+function makeIntegrityReport(root: string): IntegrityReport {
+  return {
+    status: "OK",
+    episodeId: "EP_001",
+    compositionVersion: 1,
+    compositionSourceHash: "d".repeat(64),
+    checkedAt: "2026-09-25T10:00:00.000Z",
+    assets: [
+      {
+        kind: "visual",
+        assetId: "VAS_1",
+        assetVersionId: "VAS_1_v1",
+        path: "assets/shot1.png",
+        resolvedPath: join(root, "assets/shot1.png"),
+        status: "OK",
+      },
+      {
+        kind: "audio",
+        assetId: "AST_1",
+        path: "assets/seg1.aiff",
+        resolvedPath: join(root, "assets/seg1.aiff"),
+        status: "OK",
+      },
+    ],
+    failures: [],
+  };
+}
+
+/** Stable fixture for tests that don't need a real filesystem (precondition / contract tests). */
+const OK_INTEGRITY_REPORT: IntegrityReport = makeIntegrityReport("/stable-fixture-root");
+
 interface TestEnv {
   root: string;
   outputPath: string;
   context: RenderContext;
+  integrityReport: IntegrityReport;
   cleanup: () => void;
 }
 
@@ -140,16 +150,18 @@ function makeEnv(): TestEnv {
   writeFileSync(join(root, "assets/seg1.aiff"), AIFF_BYTES);
 
   const outputPath = join(root, "output/episode.mp4");
+  const integrityReport = makeIntegrityReport(root);
   const context: RenderContext = {
     assetRoot: root,
     outputPath,
-    integrityReport: OK_INTEGRITY_REPORT,
+    integrityReport,
   };
 
   return {
     root,
     outputPath,
     context,
+    integrityReport,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }
@@ -997,4 +1009,127 @@ test("33. Staging WebVTT subtitle file is cleaned up after render", async () => 
     env.cleanup();
   }
 });
+
+test("34. Music cue with path and lifecycle PLANNED => RenderError (integrity gate)", async () => {
+  const env = makeEnv();
+  try {
+    const compWithPlannedMusic: FinalCompositionSpec = {
+      ...COMPOSITION,
+      musicCues: [
+        {
+          id: "MUS_001",
+          lifecycle: "PLANNED",
+          path: "assets/seg1.aiff",
+          startSeconds: 0,
+          endSeconds: 3,
+          style: "cinematic",
+          gainDb: -18,
+        },
+      ],
+    };
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: makeFakeProbeRunner(),
+    });
+    await assert.rejects(
+      () => renderer.render(compWithPlannedMusic, env.context),
+      (err) => err instanceof RenderError && /PLANNED/.test(err.message) && /music cue/.test(err.message)
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("35. Music cue with lifecycle GENERATED but no matching OK integrity result => RenderError", async () => {
+  const env = makeEnv();
+  try {
+    const compWithUnverifiedMusic: FinalCompositionSpec = {
+      ...COMPOSITION,
+      musicCues: [
+        {
+          id: "MUS_001",
+          lifecycle: "GENERATED",
+          audioAssetId: "UNVERIFIED_ASSET_999",
+          path: "assets/music.aiff",
+          format: "aiff",
+          startSeconds: 0,
+          endSeconds: 3,
+          style: "cinematic",
+          gainDb: -18,
+        },
+      ],
+    };
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: makeFakeProbeRunner(),
+    });
+    await assert.rejects(
+      () => renderer.render(compWithUnverifiedMusic, env.context),
+      (err) => err instanceof RenderError && /UNVERIFIED_ASSET_999/.test(err.message) && /music cue/.test(err.message)
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("36. SFX cue with path and lifecycle PLANNED => RenderError (integrity gate)", async () => {
+  const env = makeEnv();
+  try {
+    const compWithPlannedSfx: FinalCompositionSpec = {
+      ...COMPOSITION,
+      sfxCues: [
+        {
+          id: "SFX_001",
+          lifecycle: "PLANNED",
+          shotId: "SH_001",
+          path: "assets/seg1.aiff",
+          startSeconds: 0,
+          endSeconds: 0.8,
+          description: "motion swell",
+          gainDb: -24,
+        },
+      ],
+    };
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: makeFakeProbeRunner(),
+    });
+    await assert.rejects(
+      () => renderer.render(compWithPlannedSfx, env.context),
+      (err) => err instanceof RenderError && /PLANNED/.test(err.message) && /SFX cue/.test(err.message)
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("37. Renderer must not return OK when resolvedPath is empty for a visual asset", async () => {
+  const env = makeEnv();
+  try {
+    const reportMissingResolved = {
+      ...env.integrityReport,
+      assets: env.integrityReport.assets.map((a: any) =>
+        a.kind === "visual" ? { ...a, resolvedPath: "" } : a
+      ),
+    };
+    const ctx = { ...env.context, integrityReport: reportMissingResolved };
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: makeFakeProbeRunner(),
+    });
+    let threw = false;
+    let result: any;
+    try {
+      result = await renderer.render(COMPOSITION, ctx);
+    } catch (err) {
+      threw = true;
+    }
+    if (!threw) {
+      assert.notEqual(result.status, "OK", "Renderer must not return OK with empty resolvedPath");
+    }
+  } finally {
+    env.cleanup();
+  }
+});
+
 

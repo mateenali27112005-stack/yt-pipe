@@ -164,7 +164,7 @@ export function assertRenderPreconditions(
     }
   }
 
-  // Check audio assets
+  // Check audio assets (narration / dialogue)
   for (const track of c.narrationDialogueTracks) {
     const matched = reportAssets.find(
       (a) => a.kind === "audio" && a.assetId === track.audioAssetId && a.status === "OK"
@@ -172,6 +172,54 @@ export function assertRenderPreconditions(
     if (!matched) {
       throw new RenderError(
         `Renderer refuses to render: audio asset '${track.audioAssetId}' has no OK integrity report result.`
+      );
+    }
+  }
+
+  // Check realized music cues — only GENERATED cues with a path enter the render chain
+  for (const cue of (c.musicCues ?? [])) {
+    if (!cue.path) continue; // PLANNED cues have no asset — skip
+    if (cue.lifecycle !== "GENERATED") {
+      throw new RenderError(
+        `Renderer refuses to render: music cue '${cue.id}' has a path but lifecycle '${cue.lifecycle}'. ` +
+        `Only GENERATED cues may supply audio to the renderer.`
+      );
+    }
+    if (!cue.audioAssetId) {
+      throw new RenderError(
+        `Renderer refuses to render: music cue '${cue.id}' has lifecycle GENERATED and a path but no audioAssetId.`
+      );
+    }
+    const matched = reportAssets.find(
+      (a) => a.kind === "audio" && a.assetId === cue.audioAssetId && a.status === "OK"
+    );
+    if (!matched) {
+      throw new RenderError(
+        `Renderer refuses to render: music cue '${cue.id}' audio asset '${cue.audioAssetId}' has no OK integrity report result.`
+      );
+    }
+  }
+
+  // Check realized SFX cues — same rule
+  for (const cue of (c.sfxCues ?? [])) {
+    if (!cue.path) continue; // PLANNED cues have no asset — skip
+    if (cue.lifecycle !== "GENERATED") {
+      throw new RenderError(
+        `Renderer refuses to render: SFX cue '${cue.id}' has a path but lifecycle '${cue.lifecycle}'. ` +
+        `Only GENERATED cues may supply audio to the renderer.`
+      );
+    }
+    if (!cue.audioAssetId) {
+      throw new RenderError(
+        `Renderer refuses to render: SFX cue '${cue.id}' has lifecycle GENERATED and a path but no audioAssetId.`
+      );
+    }
+    const matched = reportAssets.find(
+      (a) => a.kind === "audio" && a.assetId === cue.audioAssetId && a.status === "OK"
+    );
+    if (!matched) {
+      throw new RenderError(
+        `Renderer refuses to render: SFX cue '${cue.id}' audio asset '${cue.audioAssetId}' has no OK integrity report result.`
       );
     }
   }

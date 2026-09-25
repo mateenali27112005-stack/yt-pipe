@@ -389,28 +389,34 @@ export class FFmpegRenderer implements Renderer {
       // Extend shot input duration by crossfade overlap if next shot crossfades
       const shotRenderDuration = shot.timing.durationSeconds + crossfadeDuration;
 
-      const matched = reportAssets.find(
+      const matchedVisual = reportAssets.find(
         (a) =>
           a.kind === "visual" &&
           a.assetId === shot.visualAsset.assetId &&
           a.assetVersionId === shot.visualAsset.assetVersionId &&
           a.status === "OK"
       );
-      const resolvedVisual = matched?.resolvedPath
-        ? matched.resolvedPath
-        : resolve(assetRoot, shot.visualAsset.path.replace(/^\//, ""));
-      args.push("-loop", "1", "-t", String(shotRenderDuration), "-i", resolvedVisual);
+      if (!matchedVisual?.resolvedPath) {
+        throw new Error(
+          `Internal: no verified resolvedPath for visual asset '${shot.visualAsset.assetId}' ` +
+          `(version '${shot.visualAsset.assetVersionId}'). assertRenderPreconditions should have caught this.`
+        );
+      }
+      args.push("-loop", "1", "-t", String(shotRenderDuration), "-i", matchedVisual.resolvedPath);
     }
 
-    // Inputs: Audio assets (use exact resolvedPath from integrity report)
+    // Inputs: Audio assets — resolvedPath must be present; assertRenderPreconditions guarantees this
     for (const track of audioTracks) {
-      const matched = reportAssets.find(
-        (a) => a.kind === "audio" && (track.audioAssetId ? a.assetId === track.audioAssetId : a.path === track.path) && a.status === "OK"
+      const matchedAudio = reportAssets.find(
+        (a) => a.kind === "audio" && track.audioAssetId != null && a.assetId === track.audioAssetId && a.status === "OK"
       );
-      const resolvedAudio = matched?.resolvedPath
-        ? matched.resolvedPath
-        : resolve(assetRoot, track.path.replace(/^\//, ""));
-      args.push("-i", resolvedAudio);
+      if (!matchedAudio?.resolvedPath) {
+        throw new Error(
+          `Internal: no verified resolvedPath for audio asset '${track.audioAssetId ?? track.path}'. ` +
+          `assertRenderPreconditions should have caught this.`
+        );
+      }
+      args.push("-i", matchedAudio.resolvedPath);
     }
 
     // Build filter_complex
