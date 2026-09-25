@@ -54,8 +54,9 @@ test("derives music cue identity from the actual episode ID", () => {
   const episodeTwoTimeline = structuredClone(timeline); episodeTwoTimeline.episodeId = "EP_002";
   const episodeTwoAudio = structuredClone(audio); episodeTwoAudio.episodeId = "EP_002";
   const episodeTwoMotion = structuredClone(motion); episodeTwoMotion.episodeId = "EP_002";
+  const episodeTwoManifest = structuredClone(assetManifest); episodeTwoManifest.episodeId = "EP_002";
   assert.equal(createFinalCompositionSpec(timeline, audio, motion, assetManifest, { generatedAt: new Date("2026-09-26T00:00:00.000Z") }).musicCues[0].id, "MUS_EP_001");
-  assert.equal(createFinalCompositionSpec(episodeTwoTimeline, episodeTwoAudio, episodeTwoMotion, assetManifest, { generatedAt: new Date("2026-09-26T00:00:00.000Z") }).musicCues[0].id, "MUS_EP_002");
+  assert.equal(createFinalCompositionSpec(episodeTwoTimeline, episodeTwoAudio, episodeTwoMotion, episodeTwoManifest, { generatedAt: new Date("2026-09-26T00:00:00.000Z") }).musicCues[0].id, "MUS_EP_002");
 });
 
 test("rejects mismatched audio and incomplete motion coverage", () => {
@@ -169,7 +170,7 @@ test("rejects invalid audio format and provider", () => {
 test("rejects invalid motion provenance versions", () => {
   const badVisual = structuredClone(motion);
   badVisual.sourceVisualSpecVersion = -1;
-  assert.throws(() => createFinalCompositionSpec(timeline, audio, badVisual, assetManifest), /sourceVisualSpecVersion must be positive integer/);
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, badVisual, assetManifest), /AssetManifest sourceVisualSpecVersion does not match|sourceVisualSpecVersion must be positive integer/);
 
   const badAsset = structuredClone(motion);
   badAsset.sourceAssetManifestRevision = 0;
@@ -324,4 +325,49 @@ test("CLI correctly parses flags and values", () => {
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test("rejects mismatched AssetManifest provenance", () => {
+  const badRevision = structuredClone(motion);
+  badRevision.sourceAssetManifestRevision = 999;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, badRevision, assetManifest), /does not match AssetManifest manifestRevision/);
+
+  const badEpisode = structuredClone(assetManifest);
+  badEpisode.episodeId = "EP_999";
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, motion, badEpisode), /AssetManifest episodeId does not match RealizedTimeline/);
+
+  const badSourceSpec = structuredClone(assetManifest);
+  badSourceSpec.sourceSpecVersion = 999;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, motion, badSourceSpec), /AssetManifest sourceSpecVersion does not match RealizedTimeline/);
+
+  const badVisualSpec = structuredClone(assetManifest);
+  badVisualSpec.sourceVisualSpecVersion = 999;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, motion, badVisualSpec), /AssetManifest sourceVisualSpecVersion does not match MotionCompositionPlan/);
+});
+
+test("rejects duplicate and malformed visual manifest assets", () => {
+  const duplicate = structuredClone(assetManifest);
+  duplicate.assets.push(duplicate.assets[0]);
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, motion, duplicate), /AssetManifest contains duplicate asset ID/);
+
+  const malformed = structuredClone(assetManifest);
+  malformed.assets[0].activeReferenceAsset = null;
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, motion, malformed), /AssetManifest contains a malformed asset/);
+});
+
+test("rejects malformed timeline segment IDs", () => {
+  const malformed = structuredClone(timeline);
+  malformed.segments[0].id = "";
+  assert.throws(() => createFinalCompositionSpec(malformed, audio, motion, assetManifest), /RealizedTimeline contains a malformed segment ID/);
+});
+
+test("rejects motion plan containing extraneous shots not in timeline", () => {
+  const extraneous = structuredClone(motion);
+  extraneous.shots.push({
+    ...extraneous.shots[0],
+    id: "MSR_999",
+    shotId: "SH_999"
+  });
+  // The logic asserts coverage match or timing match
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, extraneous, assetManifest), /does not match the RealizedTimeline timing|do not exactly match RealizedTimeline shots/);
 });

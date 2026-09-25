@@ -71,9 +71,15 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   }
   if (audioManifest.provider !== "macos-say") throw new Error("Audio manifest provider must be macos-say.");
 
+  // AssetManifest validation
+  if (visualManifest.episodeId !== realized.episodeId) throw new Error("AssetManifest episodeId does not match RealizedTimeline.");
+  if (visualManifest.sourceSpecVersion !== realized.sourceSpecVersion) throw new Error("AssetManifest sourceSpecVersion does not match RealizedTimeline.");
+  if (visualManifest.sourceVisualSpecVersion !== motionPlan.sourceVisualSpecVersion) throw new Error("AssetManifest sourceVisualSpecVersion does not match MotionCompositionPlan.");
+
   // 3. MotionCompositionPlan validation
   if (!positiveInteger(motionPlan.sourceVisualSpecVersion)) throw new Error("Motion plan sourceVisualSpecVersion must be positive integer.");
   if (!positiveInteger(motionPlan.sourceAssetManifestRevision)) throw new Error("Motion plan sourceAssetManifestRevision must be positive integer.");
+  if (motionPlan.sourceAssetManifestRevision !== visualManifest.manifestRevision) throw new Error("MotionCompositionPlan sourceAssetManifestRevision does not match AssetManifest manifestRevision.");
   if ("sourceSeriesBibleVersion" in motionPlan && motionPlan.sourceSeriesBibleVersion !== undefined) {
     if (!positiveInteger(motionPlan.sourceSeriesBibleVersion)) throw new Error("Motion plan sourceSeriesBibleVersion must be positive integer.");
   }
@@ -90,7 +96,12 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
     const endSeconds = current ? Math.max(current.endSeconds, segment.endSeconds) : segment.endSeconds;
     timingByShot.set(segment.shotId, { startSeconds, endSeconds, durationSeconds: endSeconds - startSeconds });
   }
-  const visualManifestAssets = new Map(visualManifest.assets!.map(a => [a.id, a]));
+  const visualManifestAssets = new Map<string, any>();
+  for (const asset of visualManifest.assets!) {
+    if (!validVisualManifestAsset(asset)) throw new Error("AssetManifest contains a malformed asset.");
+    if (visualManifestAssets.has(asset.id)) throw new Error(`AssetManifest contains duplicate asset ID '${asset.id}'.`);
+    visualManifestAssets.set(asset.id, asset);
+  }
   const motionShotIds = new Set<string>();
   const motionShotRecordIds = new Set<string>();
   let previousStart = -1;
@@ -111,10 +122,12 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   }
   for (const segment of realized.segments) {
     const asset = audioById.get(segment.audioAssetId);
-    if (!segment || !validAudioAsset(asset, segment) || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds)) throw new Error("RealizedTimeline contains an unresolved audio segment.");
+    if (!segment || !nonEmpty(segment.id) || !nonEmpty(segment.audioAssetId) || !nonEmpty(segment.shotId)) throw new Error("RealizedTimeline contains a malformed segment ID.");
+    if (!validAudioAsset(asset, segment) || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds)) throw new Error("RealizedTimeline contains an unresolved audio segment.");
     if (Math.abs(asset!.durationSeconds - segment.durationSeconds) >= 0.0001) throw new Error("Audio asset duration must match timeline segment duration.");
     if (!motionShotIds.has(segment.shotId)) throw new Error(`MotionCompositionPlan does not contain shot '${segment.shotId}'.`);
   }
+  if (timingByShot.size !== motionShotIds.size) throw new Error("MotionCompositionPlan shots do not exactly match RealizedTimeline shots.");
 }
 
 function validMotionShot(shot: unknown): shot is MotionCompositionPlan["shots"][number] {
@@ -135,6 +148,7 @@ function validAudioManifestAsset(asset: unknown): boolean {
   return typeof a.id === "string" && a.id.length > 0 &&
          typeof a.segmentId === "string" && a.segmentId.length > 0 &&
          typeof a.shotId === "string" && a.shotId.length > 0 &&
+         (a.role === "narration" || a.role === "dialogue") &&
          typeof a.voice === "string" && a.voice.length > 0 &&
          typeof a.path === "string" && a.path.length > 0 &&
          typeof a.format === "string" && a.format.length > 0 &&
@@ -156,3 +170,14 @@ function validTiming(start: unknown, end: unknown, duration: unknown): boolean {
 function sameTiming(left: { startSeconds: number; endSeconds: number; durationSeconds: number }, right: { startSeconds: number; endSeconds: number; durationSeconds: number }): boolean { return left.startSeconds === right.startSeconds && left.endSeconds === right.endSeconds && left.durationSeconds === right.durationSeconds; }
 function finiteUnit(value: unknown): boolean { return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1; }
 function hash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+
+function validVisualManifestAsset(asset: unknown): boolean {
+  if (!asset || typeof asset !== "object") return false;
+  const a = asset as Record<string, any>;
+  return nonEmpty(a.id) && nonEmpty(a.shotId) &&
+         a.activeReferenceAsset && typeof a.activeReferenceAsset === "object" &&
+         nonEmpty(a.activeReferenceAsset.versionId) &&
+         nonEmpty(a.activeReferenceAsset.path) &&
+         nonEmpty(a.activeReferenceAsset.sha256) &&
+         /^[a-f0-9]{64}$/.test(a.activeReferenceAsset.sha256);
+}
