@@ -1,16 +1,19 @@
-import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, readFile, stat } from "node:fs/promises";
+import { access, mkdir, stat, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { promisify } from "node:util";
 import type { AudioAssetManifest, AudioVoiceRegistry, EpisodeSpec, RealizedTimeline } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
 export interface SpeechProvider {
-  name: "macos-say";
+  name: string;
   synthesize(text: string, voice: string, outputPath: string): Promise<void>;
   measureDuration(outputPath: string): Promise<number>;
 }
+
+export { createOpenAiSpeechProvider, openAiSpeechProvider, type OpenAiSpeechConfig, type OpenAiSpeechConfig as OpenAiSpeechProviderOptions } from "./providers/openai-tts.ts";
+
 
 export interface AudioRunOptions {
   outputPath: string;
@@ -43,7 +46,7 @@ export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions
         await provider.synthesize(input.text, input.voice, outputPath);
         const durationSeconds = await provider.measureDuration(outputPath);
         if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error(`Audio provider returned an invalid duration for ${segmentId}.`);
-        assets.push({ id: assetId, segmentId, shotId: shot.id, role: input.role, voice: input.voice, path: `assets/${filename}`, format: "aiff", durationSeconds, sha256: createHash("sha256").update(await readFile(outputPath)).digest("hex") });
+        assets.push({ id: assetId, segmentId, shotId: shot.id, role: input.role, voice: input.voice, path: `assets/${filename}`, format: "aiff", durationSeconds });
         segments.push({ id: segmentId, shotId: shot.id, role: input.role, ...(input.speaker ? { speaker: input.speaker } : {}), text: input.text, startSeconds: cursor, endSeconds: cursor + durationSeconds, durationSeconds, audioAssetId: assetId });
         cursor += durationSeconds;
       }
@@ -51,7 +54,7 @@ export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions
   }
   const base = { schemaVersion: "0.1" as const, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, generatedAt };
   return {
-    manifest: { ...base, provider: provider.name, assets },
+    manifest: { ...base, provider: provider.name as "macos-say", assets },
     timeline: { ...base, timelineVersion, totalDurationSeconds: cursor, segments }
   };
 }
@@ -103,10 +106,7 @@ export const macosSayProvider: SpeechProvider = {
     if (file.size <= 4096) throw new Error(`macOS speech synthesis produced no audio data at ${outputPath}. Confirm the selected voice is installed and speech synthesis is available.`);
   },
   async measureDuration(outputPath) {
-    await access(outputPath);
-    const { stdout } = await execFileAsync("/usr/bin/afinfo", [outputPath]);
-    const match = stdout.match(/estimated duration:\s*([0-9]+(?:\.[0-9]+)?)\s*sec/);
-    if (!match) throw new Error(`Could not measure audio duration for ${outputPath}.`);
-    return Number(match[1]);
+    return measureAudioDurationDefault(outputPath);
   }
 };
+

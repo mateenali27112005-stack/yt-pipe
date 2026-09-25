@@ -1,7 +1,41 @@
-import type { EpisodeSpec, FinalCompositionSpec, RealizedTimeline } from "./types.ts";
+/**
+ * V0.9 Master Orchestrator — Domain Types
+ *
+ * Defines the state, checkpointing, cost ledger, and review package for the
+ * Autonomous Production pipeline.
+ */
 
-export type ProductionStage = "INIT" | "PARSED" | "CONTINUITY_CHECKED" | "PLANNED" | "AUDIO_GENERATED" | "VISUALS_GENERATED" | "RENDERED" | "QC_CHECKED" | "REPAIRED" | "COMPLETED" | "FAILED";
-export type RunStatus = "IDLE" | "RUNNING" | "COMPLETED" | "FAILED" | "NEEDS_HUMAN_REVIEW";
+import type { EpisodeQCReport, EpisodeRepairReport } from "./qc-types.ts";
+import type { ContinuityCheckReport } from "./continuity-types.ts";
+
+export type ProductionStage =
+  | "INIT"
+  | "PARSED"             // Script parsed into intermediate structure
+  | "CONTINUITY_CHECKED" // Continuity verified (no blocking violations)
+  | "PLANNED"            // FinalCompositionSpec established
+  | "AUDIO_GENERATED"    // All audio assets generated and validated
+  | "VISUALS_GENERATED"  // All visual assets generated and validated
+  | "RENDERED"           // Final video file produced
+  | "QC_CHECKED"         // runEpisodeQC complete
+  | "REPAIRED"           // Repair loop complete
+  | "REVIEW_READY";      // Ready for human review
+
+export interface ProductionCheckpoint {
+  stage: ProductionStage;
+  timestamp: string;
+  /**
+   * Deterministic hash of the stage's persisted artifact.
+   * e.g.,
+   * PARSED -> hash(episode-spec.json)
+   * PLANNED -> hash(final-composition-spec.json)
+   * AUDIO_GENERATED -> hash(audio-manifest.json)
+   * VISUALS_GENERATED -> hash(asset-manifest.json)
+   * RENDERED -> hash(rendered media file or its metadata)
+   * QC_CHECKED -> hash(qc-report.json)
+   * REPAIRED -> hash(repair-report.json)
+   */
+  dataHash: string;
+}
 
 export interface CostEntry {
   timestamp: string;
@@ -14,74 +48,44 @@ export interface CostEntry {
   metadata?: Record<string, string | number | boolean>;
 }
 
-export interface CostLedger { entries: CostEntry[]; estimatedTotalUsd: number; }
-
-export interface ProductionCheckpoint {
-  stage: ProductionStage;
-  timestamp: string;
-  dataHash: string;
-  artifactPath: string;
+export interface CostLedger {
+  entries: CostEntry[];
+  estimatedTotalUsd: number;
 }
 
 export interface ProductionRunState {
-  schemaVersion: "0.9";
+  schemaVersion: "0.1";
   runId: string;
   seriesId: string;
   episodeId: string;
-  inputHash: string;
+  /**
+   * Status differentiates between automated failure and requiring human input.
+   * RUNNING: Currently executing.
+   * STOPPED: Halted cleanly (e.g. at a checkpoint).
+   * NEEDS_HUMAN_REVIEW: Stopped deliberately for human input (e.g., ESCALATE).
+   * FAILED: Process couldn't complete the operation (e.g. unrecoverable API error, missing file).
+   * COMPLETED: Reached the end of the pipeline.
+   */
+  status: "RUNNING" | "STOPPED" | "NEEDS_HUMAN_REVIEW" | "FAILED" | "COMPLETED";
   currentStage: ProductionStage;
-  activeStage?: ProductionStage;
-  status: RunStatus;
   checkpoints: ProductionCheckpoint[];
-  artifacts: Partial<Record<ProductionStage, string>>;
   costs: CostLedger;
-  errors: Array<{ stage: ProductionStage; message: string; timestamp: string }>;
+  errors: Array<{
+    stage: ProductionStage;
+    message: string;
+    timestamp: string;
+  }>;
 }
-
-export interface ContinuityCheckReport { status: "PASS" | "WARN" | "BLOCKING"; findings: Array<{ code: string; message: string; severity: "INFO" | "WARN" | "BLOCKING" }>; }
-export interface EpisodeQCReport { status: "PASS" | "WARN" | "FAIL"; findings: Array<{ code: string; message: string; severity: "INFO" | "WARN" | "FAIL" }>; }
-export interface EpisodeRepairReport { status: "REPAIRED" | "UNCHANGED" | "FAILED"; actions: string[]; }
-export type RepairDecision = "SKIP" | "RETRY" | "ESCALATE";
 
 export interface ProductionReviewPackage {
+  schemaVersion: "0.1";
   episodeId: string;
   runId: string;
-  durationSeconds: number;
-  cost: CostLedger;
-  qcReport: EpisodeQCReport;
-  repairReport?: EpisodeRepairReport;
-  continuityReport: ContinuityCheckReport;
-  videoOutputPath: string;
-  status: "READY" | "NEEDS_HUMAN_REVIEW" | "FAILED";
-  capabilityGaps?: string[];
-}
-
-export interface StageOutput<T = unknown> {
-  data: T;
-  artifactName?: string;
   durationSeconds?: number;
+  cost: CostLedger;
+  qcReport?: EpisodeQCReport;
+  repairReport?: EpisodeRepairReport;
+  continuityReport?: ContinuityCheckReport;
   videoOutputPath?: string;
-  costs?: CostEntry[];
+  status: "READY" | "NEEDS_HUMAN_REVIEW" | "FAILED";
 }
-
-export interface ProductionInput { scriptPath?: string; scriptText?: string; seriesId: string; episodeId: string; }
-export interface StageContext {
-  input: ProductionInput;
-  runDirectory: string;
-  state: ProductionRunState;
-  artifacts: Partial<Record<ProductionStage, unknown>>;
-}
-
-export interface ProductionAdapters {
-  parse(context: StageContext): Promise<StageOutput>;
-  continuity(context: StageContext): Promise<StageOutput<ContinuityCheckReport>>;
-  plan(context: StageContext): Promise<StageOutput>;
-  audio(context: StageContext): Promise<StageOutput<{ manifest: unknown; timeline: RealizedTimeline }>>;
-  visuals(context: StageContext): Promise<StageOutput>;
-  render(context: StageContext): Promise<StageOutput<{ composition: FinalCompositionSpec }>>;
-  qc(context: StageContext): Promise<StageOutput<EpisodeQCReport>>;
-  decideRepairs(context: StageContext, report: EpisodeQCReport): Promise<RepairDecision>;
-  repair(context: StageContext): Promise<StageOutput<EpisodeRepairReport>>;
-}
-
-export interface OrchestratorOptions { maxRepairCycles?: number; now?: () => Date; adapters: ProductionAdapters; }

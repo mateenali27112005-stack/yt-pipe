@@ -33,7 +33,8 @@ export async function generateVisualAsset(visualSpec: ShotVisualSpec, manifest: 
     ...continuity.characterReferences.flatMap(character => character.activeReferenceAsset ? [character.activeReferenceAsset] : []),
     ...(continuity.locationReference.activeReferenceAsset ? [continuity.locationReference.activeReferenceAsset] : [])
   ] : undefined;
-  const result = await provider.generate({ prompt, outputFormat: "png", ...(referenceAssets?.length ? { referenceAssets } : {}) });
+  const generated = await provider.generate({ prompt, outputFormat: "png", ...(referenceAssets?.length ? { referenceAssets } : {}) });
+  const result = generated instanceof Uint8Array ? { bytes: generated, model: provider.name } : generated;
   if (!(result.bytes instanceof Uint8Array) || result.bytes.byteLength === 0) throw new Error(`Image provider '${provider.name}' returned no image bytes.`);
   const createdAt = (options.generatedAt ?? new Date()).toISOString();
   const version = Math.max(...asset.versions.map(candidate => candidate.version)) + 1;
@@ -133,23 +134,8 @@ export function assertVisualGenerationInputs(visualSpec: unknown, manifest: unkn
   if (!spec.shots.some(shot => shot.id === asset.shotVisualSpecId && shot.shotId === asset.shotId)) throw new Error(`Visual asset '${assetId}' does not resolve to a ShotVisualSpec.`);
 }
 
-export const openAiImageProvider: ImageProvider = {
-  name: "openai-images",
-  async generate(input) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("OPENAI_API_KEY is required for the OpenAI image provider. Set it locally before running visual generation.");
-    const response = await fetch("https://api.openai.com/v1/images/generations", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gpt-image-2.5-flare", prompt: input.prompt, n: 1, size: "1536x1024", quality: "medium", output_format: input.outputFormat })
-    });
-    const payload = await response.json() as { data?: Array<{ b64_json?: string; revised_prompt?: string }>; error?: { message?: string } };
-    if (!response.ok) throw new Error(`OpenAI image generation failed: ${payload.error?.message ?? response.statusText}`);
-    const image = payload.data?.[0];
-    if (!image?.b64_json) throw new Error("OpenAI image generation returned no base64 image data.");
-    return { bytes: Buffer.from(image.b64_json, "base64"), model: "gpt-image-2.5-flare", ...(image.revised_prompt ? { revisedPrompt: image.revised_prompt } : {}) };
-  }
-};
+export { createOpenAiImageProvider, openAiImageProvider, type OpenAiImageConfig, type OpenAiImageConfig as OpenAiImageProviderOptions } from "./providers/openai-image.ts";
+
 
 async function publishManifestAtomically(manifest: AssetManifest, manifestPath: string): Promise<void> {
   const destination = resolve(manifestPath);

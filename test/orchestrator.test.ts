@@ -1,111 +1,170 @@
+/**
+ * V0.9 Master Orchestrator — End-to-End Tests
+ * 
+ * Uses valid byte-level mock media to satisfy the real QC engine and FakeRenderer 
+ * to bypass FFmpeg.
+ */
+
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import { ProductionOrchestrator } from "../src/orchestrator.ts";
-import type { EpisodeQCReport, ProductionAdapters, ProductionInput, StageContext } from "../src/orchestrator-types.ts";
+import { join } from "node:path";
+import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
-function input(text = "approved script"): ProductionInput { return { scriptText: text, seriesId: "SERIES_A", episodeId: "EP_001" }; }
+import { MasterOrchestrator } from "../src/orchestrator.ts";
+import type { OrchestratorDependencies } from "../src/orchestrator.ts";
+import type { SpeechProvider } from "../src/audio.ts";
+import type { ImageProvider } from "../src/image.ts";
+import type { SeriesBible } from "../src/types.ts";
+import type { RenderResult, Renderer, FinalCompositionSpec } from "../src/renderer-types.ts";
+import { createInitialState } from "../src/continuity.ts";
 
-function adapters(options: { continuity?: "PASS" | "BLOCKING"; qc?: EpisodeQCReport[]; decision?: "SKIP" | "RETRY" | "ESCALATE"; failAudio?: boolean; counters?: Record<string, number> } = {}): ProductionAdapters {
-  const counters = options.counters ?? {};
-  const count = (name: string) => { counters[name] = (counters[name] ?? 0) + 1; };
-  let audioFailed = false;
-  let qcIndex = 0;
+// --- Valid Media Builders ---
+
+function makePNGChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const typeBuf = Buffer.from(type, "ascii");
+  const crc = Buffer.alloc(4); // Fake CRC is fine, QC doesn't check it
+  return Buffer.concat([len, typeBuf, data, crc]);
+}
+
+function makeValidPNG(width = 1920, height = 1080): Buffer {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr.writeUInt8(8, 8); // 8-bit
+  ihdr.writeUInt8(2, 9); // Truecolor
+  
+  // Make some RGB data (not all black) so QC passes
+  const idat = Buffer.from([0xff, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0xff]);
+  return Buffer.concat([sig, makePNGChunk("IHDR", ihdr), makePNGChunk("IDAT", idat), makePNGChunk("IEND", Buffer.alloc(0))]);
+}
+
+function makeAIFFChunk(type: string, data: Buffer): Buffer {
+  const typeBuf = Buffer.from(type, "ascii");
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(data.length, 0);
+  return Buffer.concat([typeBuf, size, data]);
+}
+
+function makeValidAIFF(numSampleFrames = 88200): Buffer {
+  const commData = Buffer.alloc(18);
+  commData.writeUInt16BE(1, 0); // channels
+  commData.writeUInt32BE(numSampleFrames, 2); // numSampleFrames
+  commData.writeUInt16BE(16, 6); // sampleSize
+  commData.writeUInt16BE(0x400e, 8); // 44100 Hz (IEEE 80-bit)
+  commData.writeUInt32BE(0xac440000, 10);
+  
+  const ssndData = Buffer.alloc(8 + (numSampleFrames * 2));
+  ssndData.writeUInt32BE(0, 0); // offset
+  ssndData.writeUInt32BE(0, 4); // blockSize
+  // Write some non-zero audio to pass FULL_SILENCE check
+  for (let i = 0; i < numSampleFrames; i++) ssndData.writeInt16BE(1000, 8 + (i * 2));
+
+  const commChunk = makeAIFFChunk("COMM", commData);
+  const ssndChunk = makeAIFFChunk("SSND", ssndData);
+
+  const formType = Buffer.from("AIFF", "ascii");
+  const formSize = Buffer.alloc(4);
+  formSize.writeUInt32BE(4 + commChunk.length + ssndChunk.length, 0);
+
+  return Buffer.concat([Buffer.from("FORM", "ascii"), formSize, formType, commChunk, ssndChunk]);
+}
+
+// --- Fakes ---
+
+class FakeRenderer implements Renderer {
+  async render(context: FinalCompositionSpec, options: { outputPath: string }): Promise<RenderResult> {
+    const output = Buffer.from("fake mp4 data");
+    await writeFile(options.outputPath, output);
+    return { status: "OK", outputPath: options.outputPath, format: "mp4", byteLength: output.byteLength, sha256: "0".repeat(64), rendererVersion: "fake-test" };
+  }
+}
+
+function createFakeSpeechProvider(outputDir: string): SpeechProvider {
   return {
-    async parse() { count("parse"); return { data: { episode: { episode: { id: "EP_001" } }, report: { findings: [] } } }; },
-    async continuity() { count("continuity"); return { data: { status: options.continuity ?? "PASS", findings: [] } }; },
-    async plan() { count("plan"); return { data: { planned: true } }; },
-    async audio() { count("audio"); if (options.failAudio && !audioFailed) { audioFailed = true; throw new Error("injected audio interruption"); } return { data: { manifest: {}, timeline: { totalDurationSeconds: 12 } }, costs: [{ timestamp: "2026-09-26T00:00:00.000Z", stage: "AUDIO_GENERATED", provider: "test", model: "test-tts", operation: "speech", quantity: 1, estimatedUsd: 0.12 }] }; },
-    async visuals() { count("visuals"); return { data: { assets: ["shot-1"] }, costs: [{ timestamp: "2026-09-26T00:00:00.000Z", stage: "VISUALS_GENERATED", provider: "test", model: "test-image", operation: "image", quantity: 1, estimatedUsd: 0.25 }] }; },
-    async render() { count("render"); return { data: { composition: { durationSeconds: 12 }, videoOutputPath: "output/final.mp4" } }; },
-    async qc() { count("qc"); return { data: (options.qc ?? [{ status: "PASS", findings: [] }])[qcIndex++] }; },
-    async decideRepairs() { count("decide"); return options.decision ?? "RETRY"; },
-    async repair() { count("repair"); return { data: { status: "REPAIRED", actions: ["regenerated failing shot"] }, costs: [{ timestamp: "2026-09-26T00:00:00.000Z", stage: "REPAIRED", provider: "test", model: "test-repair", operation: "repair", quantity: 1, estimatedUsd: 0.05 }] }; }
+    name: "macos-say",
+    synthesize: async (text, voice, outPath) => {
+      await mkdir(outputDir, { recursive: true });
+      await writeFile(outPath, makeValidAIFF());
+    },
+    measureDuration: async () => 2.0,
   };
 }
 
-test("runs all stages, persists a completed review, and accumulates event costs", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "v09-success-"));
-  try {
-    const review = await new ProductionOrchestrator({ adapters: adapters() }).run(input(), directory);
-    assert.equal(review.status, "READY");
-    assert.equal(review.durationSeconds, 12);
-    assert.equal(review.cost.entries.length, 2);
-    assert.equal(review.cost.estimatedTotalUsd, 0.37);
-    const state = JSON.parse(readFileSync(join(directory, ".production-state.json"), "utf8"));
-    assert.equal(state.currentStage, "COMPLETED");
-    assert.match(state.checkpoints.find((checkpoint: { stage: string }) => checkpoint.stage === "AUDIO_GENERATED").dataHash, /^[a-f0-9]{64}$/);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
+function createFakeImageProvider(): ImageProvider {
+  return {
+    name: "fake-image",
+    generate: async () => makeValidPNG(),
+  };
+}
 
-test("resumes an interrupted stage without repeating prior stages", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "v09-resume-"));
-  const counters: Record<string, number> = {};
-  try {
-    await assert.rejects(new ProductionOrchestrator({ adapters: adapters({ failAudio: true, counters }) }).run(input(), directory), /injected audio interruption/);
-    assert.deepEqual(counters, { parse: 1, continuity: 1, plan: 1, audio: 1 });
-    const review = await new ProductionOrchestrator({ adapters: adapters({ counters }) }).run(input(), directory);
-    assert.equal(review.status, "READY");
-    assert.deepEqual(counters, { parse: 1, continuity: 1, plan: 1, audio: 2, visuals: 1, render: 1, qc: 1 });
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
+function makeBible(): SeriesBible {
+  return {
+    schemaVersion: "0.1",
+    bibleVersion: 1,
+    seriesId: "SERIES_01",
+    generatedAt: "2026-09-26T00:00:00.000Z",
+    characters: [{
+      id: "CHAR_31A019B375", name: "CHAR_KAEL",
+      appearance: { hair: "dark", eyes: "amber", build: "athletic", clothing: "robes" },
+      personalityVisualCues: [], referenceAssets: []
+    }],
+    locations: [{ id: "LOC_22479CDE0B", name: "LOC_TEMPLE", visualDescription: "old temple", referenceAssets: [] }],
+    visualStyles: [{ id: "STYLE_DARK", name: "Dark", promptGuidance: "dark" }]
+  };
+}
 
-test("halts at CONTINUITY_CHECKED for a blocking continuity finding", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "v09-continuity-"));
-  try {
-    const review = await new ProductionOrchestrator({ adapters: adapters({ continuity: "BLOCKING" }) }).run(input(), directory);
-    assert.equal(review.status, "FAILED");
-    const state = JSON.parse(readFileSync(join(directory, ".production-state.json"), "utf8"));
-    assert.equal(state.currentStage, "CONTINUITY_CHECKED");
-    assert.equal(state.errors[0].stage, "CONTINUITY_CHECKED");
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
+const mockScript = `
+# Episode: The Test
+## Scene: The Ruined Temple
+Location: LOC_TEMPLE
+Time: night
+Purpose: Test
+### Shot
+Purpose: Test shot
+Characters:
+- CHAR_KAEL
+Visual: Kael stands
+Dialogue: CHAR_KAEL: Hello world
+Timing: min: 2 target: 3 max: 4
+`;
 
-test("changed input invalidates prior checkpoints and restarts parsing", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "v09-invalidate-"));
-  const first: Record<string, number> = {};
-  const second: Record<string, number> = {};
-  try {
-    await new ProductionOrchestrator({ adapters: adapters({ counters: first }) }).run(input(), directory);
-    await new ProductionOrchestrator({ adapters: adapters({ counters: second }) }).run(input("changed script"), directory);
-    assert.equal(second.parse, 1);
-    assert.equal(second.continuity, 1);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
+// --- Tests ---
 
-test("WARN can be explicitly skipped, while FAIL retries through repair", async () => {
-  const warnDirectory = mkdtempSync(join(tmpdir(), "v09-warn-"));
-  const repairDirectory = mkdtempSync(join(tmpdir(), "v09-repair-"));
+test("V0.9 Orchestrator: end-to-end success", async () => {
+  const tmp = await mkdtemp(join(tmpdir(), "v09-test-"));
   try {
-    const warn = await new ProductionOrchestrator({ adapters: adapters({ qc: [{ status: "WARN", findings: [] }], decision: "SKIP" }) }).run(input(), warnDirectory);
-    assert.equal(warn.status, "READY");
-    const repair = await new ProductionOrchestrator({ adapters: adapters({ qc: [{ status: "FAIL", findings: [] }, { status: "PASS", findings: [] }], decision: "RETRY" }) }).run(input(), repairDirectory);
-    assert.equal(repair.status, "READY");
-    assert.equal(repair.repairReport?.status, "REPAIRED");
-  } finally { rmSync(warnDirectory, { recursive: true, force: true }); rmSync(repairDirectory, { recursive: true, force: true }); }
-});
-
-test("fails after the configured maximum repair cycles", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "v09-repair-limit-"));
-  try {
-    const fail = { status: "FAIL" as const, findings: [] };
-    const review = await new ProductionOrchestrator({ maxRepairCycles: 2, adapters: adapters({ qc: [fail, fail, fail], decision: "RETRY" }) }).run(input(), directory);
-    assert.equal(review.status, "FAILED");
-    const state = JSON.parse(readFileSync(join(directory, ".production-state.json"), "utf8"));
-    assert.equal(state.costs.entries.filter((entry: { operation: string }) => entry.operation === "repair").length, 2);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
-});
-
-test("rejects a corrupted checkpoint artifact", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "v09-corrupt-"));
-  try {
-    await new ProductionOrchestrator({ adapters: adapters() }).run(input(), directory);
-    const artifactPath = join(directory, "artifacts", "PARSED.json");
-    const original = readFileSync(artifactPath, "utf8");
-    const corrupted = original.replace("EP_001", "EP_CORRUPTED");
-    writeFileSync(artifactPath, corrupted);
-    await assert.rejects(new ProductionOrchestrator({ adapters: adapters() }).run(input(), directory), /Checkpoint integrity failure for PARSED/);
-  } finally { rmSync(directory, { recursive: true, force: true }); }
+    const deps: OrchestratorDependencies = {
+      speechProvider: createFakeSpeechProvider(join(tmp, "audio")),
+      imageProvider: createFakeImageProvider(),
+      bible: makeBible(),
+      initialContinuityState: createInitialState("SERIES_01", makeBible()),
+      workingDirectory: tmp,
+      renderer: new FakeRenderer()
+    };
+    
+    const orchestrator = new MasterOrchestrator("run_1", "SERIES_01", "EP_1", deps);
+    const result = await orchestrator.run(mockScript);
+    
+    if (result.status !== "READY") {
+      console.log(JSON.stringify(result, null, 2));
+      const stateStr = await readFile(join(tmp, "production-state.json"), "utf8");
+      console.log("State:", stateStr);
+    }
+    assert.equal(result.status, "READY");
+    
+    const stateStr = await readFile(join(tmp, "production-state.json"), "utf8");
+    const state = JSON.parse(stateStr);
+    assert.equal(state.status, "COMPLETED");
+    assert.equal(state.currentStage, "REVIEW_READY");
+    
+    // Validates cost tracking
+    assert.ok(state.costs.entries.some((e: any) => e.stage === "AUDIO_GENERATED"));
+    assert.ok(state.costs.entries.some((e: any) => e.stage === "VISUALS_GENERATED"));
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
 });

@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildImagePrompt, generateAndPublishVisualAsset, generateVisualAsset, type ImageProvider } from "../src/image.ts";
+import { buildImagePrompt, createOpenAiImageProvider, generateAndPublishVisualAsset, generateVisualAsset, type ImageProvider } from "../src/image.ts";
 import { fakeImageProvider } from "../src/providers/fake-image-provider.ts";
 import { createVisualPlan } from "../src/visual.ts";
 import type { EpisodeSpec, RealizedTimeline, VisualProfile } from "../src/types.ts";
@@ -118,3 +118,127 @@ test("does not publish image files when a provider fails", async () => {
     assert.throws(() => readFileSync(join(temp, "VAS_SH_001_001_v2.png")));
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
+
+test("createOpenAiImageProvider throws when OPENAI_API_KEY is missing", async () => {
+  const provider = createOpenAiImageProvider({ apiKey: "" });
+  const originalEnv = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    await assert.rejects(
+      provider.generate({ prompt: "A glowing symbol", outputFormat: "png" }),
+      /OPENAI_API_KEY is required/
+    );
+  } finally {
+    if (originalEnv) process.env.OPENAI_API_KEY = originalEnv;
+  }
+});
+
+test("createOpenAiImageProvider generates image with b64_json mock fetch", async () => {
+  let calledUrl = "";
+  let calledBody: any = null;
+  const mockPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+  const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+    calledUrl = url.toString();
+    calledBody = JSON.parse(init?.body as string);
+    return new Response(JSON.stringify({
+      data: [{ b64_json: mockPngBase64, revised_prompt: "Revised prompt description" }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  const provider = createOpenAiImageProvider({
+    apiKey: "test-api-key",
+    model: "dall-e-3",
+    fetchImpl: mockFetch as any
+  });
+
+  const res = await provider.generate({ prompt: "A glowing symbol", outputFormat: "png" });
+  assert.equal(calledUrl, "https://api.openai.com/v1/images/generations");
+  assert.equal(calledBody.model, "dall-e-3");
+  assert.equal(calledBody.prompt, "A glowing symbol");
+  assert.equal(res.model, "dall-e-3");
+  assert.equal(res.revisedPrompt, "Revised prompt description");
+  assert.equal(res.bytes.byteLength, Buffer.from(mockPngBase64, "base64").byteLength);
+});
+
+test("createOpenAiImageProvider generates image with URL mock fetch", async () => {
+  const mockPngBytes = new Uint8Array([1, 2, 3, 4, 5]);
+  const mockFetch = async (url: string | URL | Request) => {
+    const urlStr = url.toString();
+    if (urlStr.endsWith("/images/generations")) {
+      return new Response(JSON.stringify({
+        data: [{ url: "https://oaidalleapiprodscus.blob.core.windows.net/generated/image.png" }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (urlStr.startsWith("https://oaidalleapiprodscus")) {
+      return new Response(mockPngBytes, { status: 200 });
+    }
+    return new Response("Not found", { status: 444 });
+  };
+
+  const provider = createOpenAiImageProvider({
+    apiKey: "test-api-key",
+    fetchImpl: mockFetch as any
+  });
+
+  const res = await provider.generate({ prompt: "A glowing symbol", outputFormat: "png" });
+  assert.deepEqual(res.bytes, mockPngBytes);
+});
+
+test("createOpenAiImageProvider handles HTTP error payload", async () => {
+  const mockFetch = async () => {
+    return new Response(JSON.stringify({
+      error: { message: "Rate limit exceeded" }
+    }), { status: 429, statusText: "Too Many Requests" });
+  };
+
+  const provider = createOpenAiImageProvider({
+    apiKey: "test-key",
+    fetchImpl: mockFetch as any
+  });
+
+  await assert.rejects(
+    provider.generate({ prompt: "A symbol", outputFormat: "png" }),
+    /OpenAI image generation failed \(429\): Rate limit exceeded/
+  );
+});
+
+test("generateVisualAsset integrates with OpenAI Image Provider adapter", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "visual-image-openai-"));
+  const mockPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  const mockFetch = async () => {
+    return new Response(JSON.stringify({
+      data: [{ b64_json: mockPngBase64 }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  const provider = createOpenAiImageProvider({
+    apiKey: "test-key",
+    fetchImpl: mockFetch as any
+  });
+
+  try {
+    const { visualSpec, manifest } = plan();
+    const result = await generateVisualAsset(visualSpec, manifest, "VAS_SH_001_001", {
+      outputDirectory: join(temp, "assets"),
+      provider,
+      generatedAt: new Date("2026-09-26T12:00:00.000Z")
+    });
+    const asset = result.assets[0];
+    assert.equal(asset.activeVersionId, "VAS_SH_001_001_v2");
+    assert.equal(asset.versions[1].provider?.name, "openai-images");
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("REAL OPENAI IMAGE INTEGRATION (skipped if OPENAI_API_KEY is not set)", async () => {
+  if (!process.env.OPENAI_API_KEY) {
+    return; // Safely skip when credentials are not in environment
+  }
+  const provider = createOpenAiImageProvider();
+  const res = await provider.generate({
+    prompt: "Minimalistic solid blue square on white background",
+    outputFormat: "png"
+  });
+  assert.ok(res.bytes.byteLength > 0);
+});
+

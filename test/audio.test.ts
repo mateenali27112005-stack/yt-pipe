@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createAudioRun, type SpeechProvider } from "../src/audio.ts";
+import { createAudioRun, createOpenAiSpeechProvider, type SpeechProvider } from "../src/audio.ts";
 import type { EpisodeSpec } from "../src/types.ts";
 
 const spec: EpisodeSpec = {
@@ -130,3 +130,110 @@ test("audio CLI rejects an existing empty output directory without invoking a pr
     assert.match(result.stderr, /Refusing to write into existing/);
   } finally { rmSync(temp, { recursive: true, force: true }); }
 });
+
+test("createOpenAiSpeechProvider throws when OPENAI_API_KEY is missing", async () => {
+  const provider = createOpenAiSpeechProvider({ apiKey: "" });
+  const temp = mkdtempSync(join(tmpdir(), "openai-tts-test-"));
+  try {
+    const originalEnv = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await assert.rejects(
+        provider.synthesize("Hello world", "Samantha", join(temp, "out.mp3")),
+        /OPENAI_API_KEY is required/
+      );
+    } finally {
+      if (originalEnv) process.env.OPENAI_API_KEY = originalEnv;
+    }
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("createOpenAiSpeechProvider sends valid TTS request with mocked fetch", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "openai-tts-test-"));
+  let calledUrl = "";
+  let calledBody: any = null;
+  const mockFetch = async (url: string | URL | Request, init?: RequestInit) => {
+    calledUrl = url.toString();
+    calledBody = JSON.parse(init?.body as string);
+    return new Response(Buffer.from("mock-audio-bytes"), { status: 200 });
+  };
+  const provider = createOpenAiSpeechProvider({
+    apiKey: "test-api-key",
+    model: "tts-1-hd",
+    responseFormat: "mp3",
+    fetchImpl: mockFetch as any,
+    measureDuration: async () => 3.5
+  });
+
+  try {
+    const outputPath = join(temp, "audio.mp3");
+    await provider.synthesize("The symbol had been buried for centuries.", "Samantha", outputPath);
+    assert.equal(calledUrl, "https://api.openai.com/v1/audio/speech");
+    assert.equal(calledBody.model, "tts-1-hd");
+    assert.equal(calledBody.input, "The symbol had been buried for centuries.");
+    assert.equal(calledBody.voice, "nova");
+    assert.equal(calledBody.response_format, "mp3");
+
+    const dur = await provider.measureDuration(outputPath);
+    assert.equal(dur, 3.5);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("createOpenAiSpeechProvider handles HTTP error response", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "openai-tts-test-"));
+  const mockFetch = async () => {
+    return new Response("Invalid API key provided", { status: 401, statusText: "Unauthorized" });
+  };
+  const provider = createOpenAiSpeechProvider({
+    apiKey: "invalid-key",
+    fetchImpl: mockFetch as any
+  });
+
+  try {
+    await assert.rejects(
+      provider.synthesize("Hello", "narrator", join(temp, "out.mp3")),
+      /OpenAI TTS synthesis failed \(401\): Invalid API key provided/
+    );
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("createAudioRun integrates with OpenAI TTS provider adapter", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "episode-audio-openai-"));
+  let synthCount = 0;
+  const mockFetch = async () => {
+    synthCount++;
+    return new Response(Buffer.from("dummy audio content"), { status: 200 });
+  };
+  const provider = createOpenAiSpeechProvider({
+    apiKey: "test-key",
+    fetchImpl: mockFetch as any,
+    measureDuration: async () => 2.0
+  });
+
+  try {
+    const result = await createAudioRun(spec, {
+      outputPath: join(temp, "assets"),
+      voices: { narrator: "Samantha", characters: { Kael: "Daniel" } },
+      provider,
+      generatedAt: new Date("2026-09-25T12:00:00.000Z")
+    });
+    assert.equal(synthCount, 2);
+    assert.equal(result.manifest.assets.length, 2);
+    assert.equal(result.timeline.totalDurationSeconds, 4.0);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
+test("REAL OPENAI TTS INTEGRATION (skipped if OPENAI_API_KEY is not set)", async () => {
+  if (!process.env.OPENAI_API_KEY) {
+    return; // Safely skip when credentials are not in environment
+  }
+  const temp = mkdtempSync(join(tmpdir(), "real-openai-tts-"));
+  const provider = createOpenAiSpeechProvider();
+  try {
+    const outputPath = join(temp, "test.mp3");
+    await provider.synthesize("Testing real OpenAI speech synthesis.", "alloy", outputPath);
+    const duration = await provider.measureDuration(outputPath);
+    assert.ok(duration > 0);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});
+
