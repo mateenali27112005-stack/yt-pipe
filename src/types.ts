@@ -135,12 +135,66 @@ export interface VisualProfile {
   defaultCameraIntent: string;
 }
 
+export interface ReferenceAsset {
+  id: string;
+  version: number;
+  path: string;
+  sha256?: string;
+}
+
+export interface SeriesBible {
+  schemaVersion: "0.1";
+  bibleVersion: number;
+  seriesId: string;
+  generatedAt: string;
+  characters: Array<{
+    id: string;
+    name: string;
+    appearance: { hair: string; eyes: string; build: string; clothing: string };
+    personalityVisualCues: string[];
+    referenceAssets: ReferenceAsset[];
+    activeReferenceAssetId?: string;
+  }>;
+  locations: Array<{
+    id: string;
+    name: string;
+    visualDescription: string;
+    referenceAssets: ReferenceAsset[];
+    activeReferenceAssetId?: string;
+  }>;
+  visualStyles: Array<{
+    id: string;
+    name: string;
+    promptGuidance: string;
+    negativePrompt?: string;
+  }>;
+}
+
+export interface ResolvedVisualContext {
+  characterReferences: Array<{
+    id: string;
+    name: string;
+    appearance: { hair: string; eyes: string; build: string; clothing: string };
+    personalityVisualCues: string[];
+    activeReferenceAsset?: ReferenceAsset;
+  }>;
+  locationReference: {
+    id: string;
+    name: string;
+    visualDescription: string;
+    activeReferenceAsset?: ReferenceAsset;
+  };
+  styleReference: { id: string; name: string; promptGuidance: string; negativePrompt?: string };
+  sourceHash: string;
+}
+
 export interface ShotVisualSpec {
   schemaVersion: "0.1";
   visualSpecVersion: number;
   episodeId: string;
   sourceSpecVersion: number;
   sourceTimelineVersion: number;
+  sourceSeriesBibleVersion?: number;
   generatedAt: string;
   shots: Array<{
     id: string;
@@ -156,6 +210,7 @@ export interface ShotVisualSpec {
     mood: string;
     cameraIntent: string;
     styleReference: string;
+    continuity?: ResolvedVisualContext;
     realizedTiming?: { startSeconds: number; endSeconds: number; durationSeconds: number };
     sourceHash: string;
   }>;
@@ -167,6 +222,7 @@ export interface AssetManifest {
   episodeId: string;
   sourceSpecVersion: number;
   sourceVisualSpecVersion: number;
+  sourceSeriesBibleVersion?: number;
   generatedAt: string;
   assets: Array<{
     id: string;

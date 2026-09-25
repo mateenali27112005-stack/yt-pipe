@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { resolveShotVisualContext } from "./series-bible.ts";
 import { assertAssetManifest } from "./visual.ts";
-import type { AssetManifest, ShotVisualSpec } from "./types.ts";
+import type { AssetManifest, ReferenceAsset, ResolvedVisualContext, SeriesBible, ShotVisualSpec } from "./types.ts";
 
 export interface ImageProvider {
   name: string;
-  generate(input: { prompt: string; outputFormat: "png" }): Promise<{ bytes: Uint8Array; model: string; revisedPrompt?: string }>;
+  generate(input: { prompt: string; outputFormat: "png"; referenceAssets?: ReferenceAsset[] }): Promise<{ bytes: Uint8Array; model: string; revisedPrompt?: string }>;
 }
 
 export interface ImageGenerationOptions {
   outputDirectory: string;
   provider?: ImageProvider;
+  seriesBible?: SeriesBible;
   generatedAt?: Date;
 }
 
@@ -25,8 +27,13 @@ export async function generateVisualAsset(visualSpec: ShotVisualSpec, manifest: 
   const provider = options.provider ?? openAiImageProvider;
   const asset = manifest.assets.find(candidate => candidate.id === assetId)!;
   const shot = visualSpec.shots.find(candidate => candidate.id === asset.shotVisualSpecId)!;
-  const prompt = buildImagePrompt(shot);
-  const result = await provider.generate({ prompt, outputFormat: "png" });
+  const continuity = resolveImageContinuity(visualSpec, shot, options.seriesBible);
+  const prompt = buildImagePrompt(shot, continuity);
+  const referenceAssets = continuity ? [
+    ...continuity.characterReferences.flatMap(character => character.activeReferenceAsset ? [character.activeReferenceAsset] : []),
+    ...(continuity.locationReference.activeReferenceAsset ? [continuity.locationReference.activeReferenceAsset] : [])
+  ] : undefined;
+  const result = await provider.generate({ prompt, outputFormat: "png", ...(referenceAssets?.length ? { referenceAssets } : {}) });
   if (!(result.bytes instanceof Uint8Array) || result.bytes.byteLength === 0) throw new Error(`Image provider '${provider.name}' returned no image bytes.`);
   const createdAt = (options.generatedAt ?? new Date()).toISOString();
   const version = Math.max(...asset.versions.map(candidate => candidate.version)) + 1;
@@ -78,7 +85,7 @@ export async function generateAndPublishVisualAsset(visualSpec: ShotVisualSpec, 
   }
 }
 
-export function buildImagePrompt(shot: ShotVisualSpec["shots"][number]): string {
+export function buildImagePrompt(shot: ShotVisualSpec["shots"][number], continuity?: ResolvedVisualContext): string {
   return [
     "Use case: illustration-story",
     "Asset type: cinematic motion-comic shot",
@@ -89,8 +96,29 @@ export function buildImagePrompt(shot: ShotVisualSpec["shots"][number]): string 
     `Lighting and mood: ${shot.lighting}; ${shot.mood}`,
     `Camera intent: ${shot.cameraIntent}`,
     `Style reference: ${shot.styleReference}`,
+    ...(continuity ? continuity.characterReferences.flatMap(character => [
+      `Character identity (${character.id}, ${character.name}): hair ${character.appearance.hair}; eyes ${character.appearance.eyes}; build ${character.appearance.build}; clothing ${character.appearance.clothing}`,
+      ...(character.personalityVisualCues.length ? [`Character visual cues (${character.id}): ${character.personalityVisualCues.join(", ")}`] : []),
+      ...(character.activeReferenceAsset ? [`Character active reference (${character.id}): ${character.activeReferenceAsset.id}`] : [])
+    ]) : []),
+    ...(continuity ? [
+      `Location identity (${continuity.locationReference.id}, ${continuity.locationReference.name}): ${continuity.locationReference.visualDescription}`,
+      ...(continuity.locationReference.activeReferenceAsset ? [`Location active reference (${continuity.locationReference.id}): ${continuity.locationReference.activeReferenceAsset.id}`] : []),
+      `Canonical style (${continuity.styleReference.id}, ${continuity.styleReference.name}): ${continuity.styleReference.promptGuidance}`,
+      ...(continuity.styleReference.negativePrompt ? [`Avoid: ${continuity.styleReference.negativePrompt}`] : [])
+    ] : []),
     "Constraints: coherent character identity and location continuity; no text, captions, logos, or watermarks"
   ].join("\n");
+}
+
+function resolveImageContinuity(visualSpec: ShotVisualSpec, shot: ShotVisualSpec["shots"][number], bible: SeriesBible | undefined): ResolvedVisualContext | undefined {
+  if (!visualSpec.sourceSeriesBibleVersion && !shot.continuity) return undefined;
+  if (!visualSpec.sourceSeriesBibleVersion || !shot.continuity) throw new Error("ShotVisualSpec has incomplete SeriesBible continuity provenance.");
+  if (!bible) throw new Error("Image generation for a continuity-enriched ShotVisualSpec requires the matching SeriesBible.");
+  if (bible.bibleVersion !== visualSpec.sourceSeriesBibleVersion) throw new Error("SeriesBible version does not match the ShotVisualSpec provenance.");
+  const resolved = resolveShotVisualContext({ characterIds: shot.characterIds, locationId: shot.locationId, styleReference: shot.styleReference }, bible);
+  if (resolved.sourceHash !== shot.continuity.sourceHash) throw new Error("SeriesBible content does not match the ShotVisualSpec continuity snapshot. Create a new visual plan before generating.");
+  return resolved;
 }
 
 export function assertVisualGenerationInputs(visualSpec: unknown, manifest: unknown, assetId: string): asserts visualSpec is ShotVisualSpec & { visualSpecVersion: number } {
@@ -99,7 +127,7 @@ export function assertVisualGenerationInputs(visualSpec: unknown, manifest: unkn
   if (spec.schemaVersion !== "0.1" || !Number.isInteger(spec.visualSpecVersion) || (spec.visualSpecVersion ?? 0) < 1 || !Array.isArray(spec.shots)) throw new Error("ShotVisualSpec is missing required fields.");
   assertAssetManifest(manifest);
   const assets = manifest as AssetManifest;
-  if (assets.episodeId !== spec.episodeId || assets.sourceSpecVersion !== spec.sourceSpecVersion || assets.sourceVisualSpecVersion !== spec.visualSpecVersion) throw new Error("AssetManifest does not match the ShotVisualSpec provenance.");
+  if (assets.episodeId !== spec.episodeId || assets.sourceSpecVersion !== spec.sourceSpecVersion || assets.sourceVisualSpecVersion !== spec.visualSpecVersion || assets.sourceSeriesBibleVersion !== spec.sourceSeriesBibleVersion) throw new Error("AssetManifest does not match the ShotVisualSpec provenance.");
   const asset = assets.assets.find(candidate => candidate.id === assetId);
   if (!asset) throw new Error(`Visual asset '${assetId}' does not exist in the manifest.`);
   if (!spec.shots.some(shot => shot.id === asset.shotVisualSpecId && shot.shotId === asset.shotId)) throw new Error(`Visual asset '${assetId}' does not resolve to a ShotVisualSpec.`);

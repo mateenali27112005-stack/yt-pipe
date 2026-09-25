@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "0.1",
+  "bibleVersion": 1,
+  "seriesId": "SERIES_AWAKENING",
+  "generatedAt": "2026-09-25T00:00:00.000Z",
+  "characters": [
+    {
+      "id": "CHAR_0E8B455B15",
+      "name": "Kael",
+      "appearance": {
+        "hair": "short black hair",
+        "eyes": "amber eyes",
+        "build": "lean athletic build",
+        "clothing": "dark traveler uniform"
+      },
+      "personalityVisualCues": ["guarded posture"],
+      "referenceAssets": []
+    }
+  ],
+  "locations": [
+    {
+      "id": "LOC_A299570CB3",
+      "name": "ruined_temple",
+      "visualDescription": "weathered stone, broken columns, and cold blue runes",
+      "referenceAssets": []
+    }
+  ],
+  "visualStyles": [
+    {
+      "id": "STYLE_001",
+      "name": "cinematic manhwa",
+      "promptGuidance": "clean manhwa linework with cinematic blue lighting",
+      "negativePrompt": "photorealism, text, logos"
+    }
+  ]
+}
