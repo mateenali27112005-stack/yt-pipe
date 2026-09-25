@@ -287,6 +287,10 @@ export interface FinalCompositionSpec {
   sourceAssetManifestRevision: number;
   generatedAt: string;
   durationSeconds: number;
+  visualComposition: {
+    canvas: MotionCompositionPlan["canvas"];
+    shots: MotionCompositionPlan["shots"];
+  };
   narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number }>;
   musicCues: Array<{ id: string; lifecycle: "PLANNED"; startSeconds: number; endSeconds: number; style: string; gainDb: number }>;
   sfxCues: Array<{ id: string; lifecycle: "PLANNED"; shotId: string; startSeconds: number; endSeconds: number; description: string; gainDb: number }>;

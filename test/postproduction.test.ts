@@ -18,11 +18,24 @@ test("assembles deterministic narration, music, SFX, and captions on the realize
   const second = createFinalCompositionSpec(timeline, audio, motion, { generatedAt: new Date("2026-09-26T00:00:00.000Z") });
   assert.deepEqual(first, second);
   assert.equal(first.durationSeconds, 3);
+  assert.deepEqual(first.visualComposition.canvas, motion.canvas);
+  assert.deepEqual(first.visualComposition.shots, motion.shots);
+  assert.equal(first.visualComposition.shots[0].visualAsset.assetVersionId, "VAS_SH_001_001_v2");
+  assert.deepEqual(first.visualComposition.shots[0].camera.keyframes, motion.shots[0].camera.keyframes);
   assert.deepEqual(first.narrationDialogueTracks.map(track => track.audioAssetId), ["AST_1", "AST_2"]);
   assert.deepEqual(first.captions.map(caption => caption.text), ["The symbol woke.", "What is this?"]);
   assert.equal(first.musicCues[0].lifecycle, "PLANNED");
+  assert.equal(first.musicCues[0].id, "MUS_EP_001");
   assert.equal(first.sfxCues[0].description, "subtle cinematic motion swell");
   assert.match(first.sourceHash, /^[a-f0-9]{64}$/);
+});
+
+test("derives music cue identity from the actual episode ID", () => {
+  const episodeTwoTimeline = structuredClone(timeline); episodeTwoTimeline.episodeId = "EP_002";
+  const episodeTwoAudio = structuredClone(audio); episodeTwoAudio.episodeId = "EP_002";
+  const episodeTwoMotion = structuredClone(motion); episodeTwoMotion.episodeId = "EP_002";
+  assert.equal(createFinalCompositionSpec(timeline, audio, motion, { generatedAt: new Date("2026-09-26T00:00:00.000Z") }).musicCues[0].id, "MUS_EP_001");
+  assert.equal(createFinalCompositionSpec(episodeTwoTimeline, episodeTwoAudio, episodeTwoMotion, { generatedAt: new Date("2026-09-26T00:00:00.000Z") }).musicCues[0].id, "MUS_EP_002");
 });
 
 test("rejects mismatched audio and incomplete motion coverage", () => {

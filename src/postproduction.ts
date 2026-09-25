@@ -8,16 +8,17 @@ export function createFinalCompositionSpec(timeline: RealizedTimeline, audio: Au
   const compositionVersion = options.compositionVersion ?? 1;
   if (!positiveInteger(compositionVersion)) throw new Error("Composition version must be a positive integer.");
   const durationSeconds = timeline.totalDurationSeconds;
+  const visualComposition = { canvas: structuredClone(motion.canvas), shots: structuredClone(motion.shots) };
   const assets = new Map(audio.assets.map(asset => [asset.id, asset]));
   const narrationDialogueTracks = timeline.segments.map(segment => {
     const asset = assets.get(segment.audioAssetId)!;
     return { id: `MIX_${segment.id}`, audioAssetId: asset.id, path: asset.path, role: segment.role, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds, gainDb: 0 };
   });
   const captions = timeline.segments.map(segment => ({ id: `CAP_${segment.id}`, role: segment.role, ...(segment.speaker ? { speaker: segment.speaker } : {}), text: segment.text, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds }));
-  const musicCues = durationSeconds > 0 ? [{ id: "MUS_EPISODE_001", lifecycle: "PLANNED" as const, startSeconds: 0, endSeconds: durationSeconds, style: options.musicStyle ?? "cinematic instrumental underscore", gainDb: -18 }] : [];
+  const musicCues = durationSeconds > 0 ? [{ id: `MUS_${timeline.episodeId}`, lifecycle: "PLANNED" as const, startSeconds: 0, endSeconds: durationSeconds, style: options.musicStyle ?? "cinematic instrumental underscore", gainDb: -18 }] : [];
   const sfxCues = motion.shots.flatMap(shot => inferSfx(shot.shotId, shot.timing.startSeconds, shot.timing.endSeconds, shot.camera.intent));
-  const source = { timelineVersion: timeline.timelineVersion, audioAssets: narrationDialogueTracks, motionPlanVersion: motion.motionPlanVersion, motionManifestRevision: motion.sourceAssetManifestRevision, musicCues, sfxCues, captions };
-  return { schemaVersion: "0.1", compositionVersion, episodeId: timeline.episodeId, sourceSpecVersion: timeline.sourceSpecVersion, sourceTimelineVersion: timeline.timelineVersion, sourceMotionPlanVersion: motion.motionPlanVersion, sourceAssetManifestRevision: motion.sourceAssetManifestRevision, generatedAt: (options.generatedAt ?? new Date()).toISOString(), durationSeconds, narrationDialogueTracks, musicCues, sfxCues, captions, sourceHash: hash(source) };
+  const source = { timelineVersion: timeline.timelineVersion, audioAssets: narrationDialogueTracks, visualComposition, motionPlanVersion: motion.motionPlanVersion, motionManifestRevision: motion.sourceAssetManifestRevision, musicCues, sfxCues, captions };
+  return { schemaVersion: "0.1", compositionVersion, episodeId: timeline.episodeId, sourceSpecVersion: timeline.sourceSpecVersion, sourceTimelineVersion: timeline.timelineVersion, sourceMotionPlanVersion: motion.motionPlanVersion, sourceAssetManifestRevision: motion.sourceAssetManifestRevision, generatedAt: (options.generatedAt ?? new Date()).toISOString(), durationSeconds, visualComposition, narrationDialogueTracks, musicCues, sfxCues, captions, sourceHash: hash(source) };
 }
 
 export function assertPostproductionInputs(timeline: unknown, audio: unknown, motion: unknown): asserts timeline is RealizedTimeline {
