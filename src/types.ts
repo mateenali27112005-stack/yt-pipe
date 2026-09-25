@@ -105,6 +105,7 @@ export interface AudioAssetManifest {
     path: string;
     format: "aiff";
     durationSeconds: number;
+    sha256: string;
   }>;
 }
 
@@ -291,7 +292,7 @@ export interface FinalCompositionSpec {
     canvas: MotionCompositionPlan["canvas"];
     shots: MotionCompositionPlan["shots"];
   };
-  narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number }>;
+  narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; format: "aiff"; durationSeconds: number; sha256: string; voice: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number }>;
   musicCues: Array<{ id: string; lifecycle: "PLANNED"; startSeconds: number; endSeconds: number; style: string; gainDb: number }>;
   sfxCues: Array<{ id: string; lifecycle: "PLANNED"; shotId: string; startSeconds: number; endSeconds: number; description: string; gainDb: number }>;
   captions: Array<{ id: string; role: "narration" | "dialogue"; speaker?: string; text: string; startSeconds: number; endSeconds: number }>;

@@ -12,7 +12,7 @@ export function createFinalCompositionSpec(timeline: RealizedTimeline, audio: Au
   const assets = new Map(audio.assets.map(asset => [asset.id, asset]));
   const narrationDialogueTracks = timeline.segments.map(segment => {
     const asset = assets.get(segment.audioAssetId)!;
-    return { id: `MIX_${segment.id}`, audioAssetId: asset.id, path: asset.path, role: segment.role, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds, gainDb: 0 };
+    return { id: `MIX_${segment.id}`, audioAssetId: asset.id, path: asset.path, format: asset.format, durationSeconds: asset.durationSeconds, sha256: asset.sha256, voice: asset.voice, role: segment.role, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds, gainDb: 0 };
   });
   const captions = timeline.segments.map(segment => ({ id: `CAP_${segment.id}`, role: segment.role, ...(segment.speaker ? { speaker: segment.speaker } : {}), text: segment.text, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds }));
   const musicCues = durationSeconds > 0 ? [{ id: `MUS_${timeline.episodeId}`, lifecycle: "PLANNED" as const, startSeconds: 0, endSeconds: durationSeconds, style: options.musicStyle ?? "cinematic instrumental underscore", gainDb: -18 }] : [];
@@ -27,10 +27,27 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   if (realized.schemaVersion !== "0.1" || !positiveInteger(realized.timelineVersion) || !positiveInteger(realized.sourceSpecVersion) || !nonEmpty(realized.episodeId) || !finitePositive(realized.totalDurationSeconds) || !Array.isArray(realized.segments)) throw new Error("RealizedTimeline is missing required postproduction fields.");
   if (!audio || typeof audio !== "object") throw new Error("Postproduction requires an AudioAssetManifest JSON object.");
   const audioManifest = audio as Partial<AudioAssetManifest>;
-  if (audioManifest.schemaVersion !== "0.1" || audioManifest.episodeId !== realized.episodeId || audioManifest.sourceSpecVersion !== realized.sourceSpecVersion || !Array.isArray(audioManifest.assets)) throw new Error("AudioAssetManifest does not match the RealizedTimeline provenance.");
+  if (audioManifest.schemaVersion !== "0.1" || audioManifest.provider !== "macos-say" || audioManifest.episodeId !== realized.episodeId || audioManifest.sourceSpecVersion !== realized.sourceSpecVersion || !Array.isArray(audioManifest.assets)) throw new Error("AudioAssetManifest does not match the RealizedTimeline provenance.");
   if (!motion || typeof motion !== "object") throw new Error("Postproduction requires a MotionCompositionPlan JSON object.");
   const motionPlan = motion as Partial<MotionCompositionPlan>;
-  if (motionPlan.schemaVersion !== "0.1" || !positiveInteger(motionPlan.motionPlanVersion) || motionPlan.episodeId !== realized.episodeId || motionPlan.sourceSpecVersion !== realized.sourceSpecVersion || motionPlan.sourceTimelineVersion !== realized.timelineVersion || !Array.isArray(motionPlan.shots)) throw new Error("MotionCompositionPlan does not match the RealizedTimeline provenance.");
+  if (motionPlan.schemaVersion !== "0.1" || !positiveInteger(motionPlan.motionPlanVersion) || !positiveInteger(motionPlan.sourceVisualSpecVersion) || !positiveInteger(motionPlan.sourceAssetManifestRevision) || (motionPlan.sourceSeriesBibleVersion !== undefined && !positiveInteger(motionPlan.sourceSeriesBibleVersion)) || motionPlan.episodeId !== realized.episodeId || motionPlan.sourceSpecVersion !== realized.sourceSpecVersion || motionPlan.sourceTimelineVersion !== realized.timelineVersion || !Array.isArray(motionPlan.shots)) throw new Error("MotionCompositionPlan does not match the RealizedTimeline provenance.");
+  const segmentIds = new Set<string>();
+  const audioAssetIds = new Set<string>();
+  let previousEnd = 0;
+  for (const segment of realized.segments) {
+    if (!segment || !nonEmpty(segment.id) || !nonEmpty(segment.audioAssetId) || !nonEmpty(segment.shotId) || !nonEmpty(segment.text) || !["narration", "dialogue"].includes(segment.role) || (segment.role === "dialogue" && !nonEmpty(segment.speaker)) || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds) || segment.startSeconds !== previousEnd || segmentIds.has(segment.id) || audioAssetIds.has(segment.audioAssetId)) throw new Error("RealizedTimeline contains invalid chronological segments.");
+    segmentIds.add(segment.id);
+    audioAssetIds.add(segment.audioAssetId);
+    previousEnd = segment.endSeconds;
+  }
+  if (previousEnd !== realized.totalDurationSeconds) throw new Error("RealizedTimeline totalDurationSeconds does not match its final segment.");
+  const manifestAssetIds = new Set<string>();
+  const manifestSegmentIds = new Set<string>();
+  for (const asset of audioManifest.assets) {
+    if (!asset || !nonEmpty(asset.id) || !nonEmpty(asset.segmentId) || manifestAssetIds.has(asset.id) || manifestSegmentIds.has(asset.segmentId)) throw new Error("AudioAssetManifest contains duplicate or invalid asset identities.");
+    manifestAssetIds.add(asset.id);
+    manifestSegmentIds.add(asset.segmentId);
+  }
   const audioById = new Map(audioManifest.assets.map(asset => [asset.id, asset]));
   const timingByShot = new Map<string, { startSeconds: number; endSeconds: number; durationSeconds: number }>();
   for (const segment of realized.segments) {
@@ -70,7 +87,7 @@ function validMotionShot(shot: unknown): shot is MotionCompositionPlan["shots"][
 }
 
 function validAudioAsset(asset: AudioAssetManifest["assets"][number] | undefined, segment: RealizedTimeline["segments"][number]): boolean {
-  return Boolean(asset && nonEmpty(asset.id) && asset.segmentId === segment.id && asset.shotId === segment.shotId && asset.role === segment.role && nonEmpty(asset.voice) && nonEmpty(asset.path) && nonEmpty(asset.format) && finitePositive(asset.durationSeconds));
+  return Boolean(asset && nonEmpty(asset.id) && asset.segmentId === segment.id && asset.shotId === segment.shotId && asset.role === segment.role && nonEmpty(asset.voice) && nonEmpty(asset.path) && asset.format === "aiff" && finitePositive(asset.durationSeconds) && /^[a-f0-9]{64}$/.test(asset.sha256) && asset.durationSeconds === segment.durationSeconds);
 }
 
 function inferSfx(shotId: string, startSeconds: number, endSeconds: number, intent: string) {
@@ -80,7 +97,7 @@ function inferSfx(shotId: string, startSeconds: number, endSeconds: number, inte
 function positiveInteger(value: unknown): value is number { return Number.isInteger(value) && (value as number) > 0; }
 function finitePositive(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value) && value > 0; }
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
-function validTiming(start: unknown, end: unknown, duration: unknown): boolean { return [start, end, duration].every(value => typeof value === "number" && Number.isFinite(value)) && (end as number) >= (start as number) && (duration as number) === (end as number) - (start as number); }
+function validTiming(start: unknown, end: unknown, duration: unknown): boolean { return [start, end, duration].every(value => typeof value === "number" && Number.isFinite(value)) && (end as number) > (start as number) && (duration as number) > 0 && (duration as number) === (end as number) - (start as number); }
 function sameTiming(left: { startSeconds: number; endSeconds: number; durationSeconds: number }, right: { startSeconds: number; endSeconds: number; durationSeconds: number }): boolean { return left.startSeconds === right.startSeconds && left.endSeconds === right.endSeconds && left.durationSeconds === right.durationSeconds; }
 function finiteUnit(value: unknown): boolean { return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1; }
 function hash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }

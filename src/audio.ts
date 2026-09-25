@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { AudioAssetManifest, AudioVoiceRegistry, EpisodeSpec, RealizedTimeline } from "./types.ts";
 
@@ -42,7 +43,7 @@ export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions
         await provider.synthesize(input.text, input.voice, outputPath);
         const durationSeconds = await provider.measureDuration(outputPath);
         if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error(`Audio provider returned an invalid duration for ${segmentId}.`);
-        assets.push({ id: assetId, segmentId, shotId: shot.id, role: input.role, voice: input.voice, path: `assets/${filename}`, format: "aiff", durationSeconds });
+        assets.push({ id: assetId, segmentId, shotId: shot.id, role: input.role, voice: input.voice, path: `assets/${filename}`, format: "aiff", durationSeconds, sha256: createHash("sha256").update(await readFile(outputPath)).digest("hex") });
         segments.push({ id: segmentId, shotId: shot.id, role: input.role, ...(input.speaker ? { speaker: input.speaker } : {}), text: input.text, startSeconds: cursor, endSeconds: cursor + durationSeconds, durationSeconds, audioAssetId: assetId });
         cursor += durationSeconds;
       }
