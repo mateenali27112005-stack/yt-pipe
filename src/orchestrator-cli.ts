@@ -13,6 +13,7 @@ import { MasterOrchestrator } from "./orchestrator.ts";
 import { createOpenAiSpeechProvider } from "./providers/openai-tts.ts";
 import { createOpenAiImageProvider } from "./providers/openai-image.ts";
 import { createInitialState } from "./continuity.ts";
+import { loadDotEnv } from "./env.ts";
 import type { SeriesBible } from "./types.ts";
 
 export async function runOrchestratorCli(argv: string[]): Promise<number> {
@@ -25,6 +26,7 @@ export async function runOrchestratorCli(argv: string[]): Promise<number> {
   const [runId, seriesId, episodeId, scriptPath, biblePath, workingDir] = args;
 
   try {
+    await loadDotEnv();
     const scriptStr = await readFile(resolve(scriptPath), "utf8");
     const bibleStr = await readFile(resolve(biblePath), "utf8");
     const bible = JSON.parse(bibleStr) as SeriesBible;

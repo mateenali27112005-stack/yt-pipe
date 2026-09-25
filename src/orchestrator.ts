@@ -337,6 +337,9 @@ export class MasterOrchestrator {
       }
 
       // 7. COMPLETE
+      if (!qcReport || qcReport.status !== "PASS" || !(await this.fileExists(join(this.deps.workingDirectory, "render", "output.mp4")))) {
+        throw new Error("Final review requires a present rendered output and a passing QC report.");
+      }
       this.state.status = "COMPLETED";
       this.state.currentStage = "REVIEW_READY";
       await this.saveState();
