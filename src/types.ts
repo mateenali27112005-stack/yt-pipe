@@ -250,3 +250,29 @@ export interface AssetManifest {
     }>;
   }>;
 }
+
+export interface MotionCompositionPlan {
+  schemaVersion: "0.1";
+  motionPlanVersion: number;
+  episodeId: string;
+  sourceSpecVersion: number;
+  sourceTimelineVersion: number;
+  sourceVisualSpecVersion: number;
+  sourceAssetManifestRevision: number;
+  sourceSeriesBibleVersion?: number;
+  generatedAt: string;
+  canvas: { width: number; height: number; frameRate: number };
+  shots: Array<{
+    id: string;
+    sceneId: string;
+    shotId: string;
+    visualAsset: { assetId: string; assetVersionId: string; path: string; sha256: string };
+    timing: { startSeconds: number; endSeconds: number; durationSeconds: number };
+    camera: {
+      intent: string;
+      keyframes: Array<{ offset: 0 | 1; scale: number; x: number; y: number }>;
+    };
+    transitionIn?: { type: "CUT" | "CROSSFADE"; atSeconds: number; durationSeconds: number };
+    sourceHash: string;
+  }>;
+}
