@@ -72,12 +72,15 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   if (audioManifest.provider !== "macos-say") throw new Error("Audio manifest provider must be macos-say.");
 
   // AssetManifest validation
+  if (!nonEmpty(visualManifest.episodeId) || !positiveInteger(visualManifest.sourceSpecVersion) || !positiveInteger(visualManifest.sourceVisualSpecVersion)) {
+    throw new Error("AssetManifest provenance fields are invalid.");
+  }
   if (visualManifest.episodeId !== realized.episodeId) throw new Error("AssetManifest episodeId does not match RealizedTimeline.");
   if (visualManifest.sourceSpecVersion !== realized.sourceSpecVersion) throw new Error("AssetManifest sourceSpecVersion does not match RealizedTimeline.");
-  if (visualManifest.sourceVisualSpecVersion !== motionPlan.sourceVisualSpecVersion) throw new Error("AssetManifest sourceVisualSpecVersion does not match MotionCompositionPlan.");
 
   // 3. MotionCompositionPlan validation
   if (!positiveInteger(motionPlan.sourceVisualSpecVersion)) throw new Error("Motion plan sourceVisualSpecVersion must be positive integer.");
+  if (visualManifest.sourceVisualSpecVersion !== motionPlan.sourceVisualSpecVersion) throw new Error("AssetManifest sourceVisualSpecVersion does not match MotionCompositionPlan.");
   if (!positiveInteger(motionPlan.sourceAssetManifestRevision)) throw new Error("Motion plan sourceAssetManifestRevision must be positive integer.");
   if (motionPlan.sourceAssetManifestRevision !== visualManifest.manifestRevision) throw new Error("MotionCompositionPlan sourceAssetManifestRevision does not match AssetManifest manifestRevision.");
   if ("sourceSeriesBibleVersion" in motionPlan && motionPlan.sourceSeriesBibleVersion !== undefined) {
