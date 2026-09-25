@@ -29,7 +29,7 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, rename, rm, stat } from "node:fs/promises";
+import { access, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -200,31 +200,42 @@ export class FFmpegRenderer implements Renderer {
     const targetDir = dirname(normalizedOutput);
     const tmpSuffix = randomBytes(6).toString("hex");
     const stagingOutput = join(targetDir, `.render_staging_${tmpSuffix}.mp4`);
+    let stagingSubPath: string | undefined = undefined;
 
     try {
-      // 4. Construct FFmpeg arguments using exact resolved paths from IntegrityReport
+      // 4. Generate WebVTT caption file if captions are present
+      if (composition.captions && composition.captions.length > 0) {
+        stagingSubPath = join(targetDir, `.render_staging_${tmpSuffix}.vtt`);
+        const vttContent = this.generateWebVTT(composition.captions);
+        await writeFile(stagingSubPath, vttContent, "utf8");
+      }
+
+      // 5. Construct FFmpeg arguments using exact resolved paths from IntegrityReport
       const ffmpegArgs = this.buildFFmpegArgs(
         composition,
         context.integrityReport.assets,
         normalizedRoot,
-        stagingOutput
+        stagingOutput,
+        stagingSubPath
       );
 
-      // 5. Execute FFmpeg
+      // 6. Execute FFmpeg
       const renderProc = await this.processRunner(this.ffmpegPath, ffmpegArgs);
       if (renderProc.exitCode !== 0) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `FFmpeg process exited with code ${renderProc.exitCode}: ${renderProc.stderr || renderProc.stdout}`,
         };
       }
 
-      // 6. Post-render verification
+      // 7. Post-render verification
       try {
         await access(stagingOutput);
       } catch {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `FFmpeg output file missing after rendering: ${stagingOutput}`,
@@ -234,6 +245,7 @@ export class FFmpegRenderer implements Renderer {
       const fileStat = await stat(stagingOutput);
       if (fileStat.size === 0) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `FFmpeg output file is empty (0 bytes): ${stagingOutput}`,
@@ -246,6 +258,7 @@ export class FFmpegRenderer implements Renderer {
         probed = await this.probeRunner(stagingOutput);
       } catch (err: any) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `Post-render FFprobe verification failed: ${err.message ?? err}`,
@@ -256,6 +269,7 @@ export class FFmpegRenderer implements Renderer {
       // Verify duration
       if (typeof probed.durationSeconds !== "number" || isNaN(probed.durationSeconds)) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: "Post-render verification failed: probed duration is undefined or invalid.",
@@ -265,6 +279,7 @@ export class FFmpegRenderer implements Renderer {
       const durationDiff = Math.abs(probed.durationSeconds - composition.durationSeconds);
       if (durationDiff > this.durationTolerance) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `Post-render duration mismatch: expected ${composition.durationSeconds}s ±${this.durationTolerance}s, got ${probed.durationSeconds}s (diff: ${durationDiff.toFixed(3)}s).`,
@@ -274,6 +289,7 @@ export class FFmpegRenderer implements Renderer {
       // Verify video stream presence & canvas dimensions
       if (!probed.videoStream) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: "Post-render verification failed: output file contains no video stream.",
@@ -282,6 +298,7 @@ export class FFmpegRenderer implements Renderer {
       const canvas = composition.visualComposition.canvas;
       if (probed.videoStream.width && probed.videoStream.width !== canvas.width) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `Post-render video width mismatch: expected ${canvas.width}, got ${probed.videoStream.width}.`,
@@ -289,27 +306,34 @@ export class FFmpegRenderer implements Renderer {
       }
       if (probed.videoStream.height && probed.videoStream.height !== canvas.height) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
           reason: `Post-render video height mismatch: expected ${canvas.height}, got ${probed.videoStream.height}.`,
         };
       }
 
-      // Verify audio stream if narration tracks exist
-      if (composition.narrationDialogueTracks.length > 0 && !probed.audioStream) {
+      // Verify audio stream if narration/dialogue tracks exist
+      const totalAudioTracks = composition.narrationDialogueTracks.length +
+        (composition.musicCues ?? []).filter(c => c.path).length +
+        (composition.sfxCues ?? []).filter(c => c.path).length;
+
+      if (totalAudioTracks > 0 && !probed.audioStream) {
         await this.safeRemove(stagingOutput);
+        await this.safeRemove(stagingSubPath);
         return {
           status: "FAILED",
-          reason: "Post-render verification failed: composition has narration tracks but output contains no audio stream.",
+          reason: "Post-render verification failed: composition has narration/audio tracks but output contains no audio stream.",
         };
       }
 
-      // 7. Compute final hashes & byte length
+      // 8. Compute final hashes & byte length
       const actualByteLength = fileStat.size;
       const actualSha256 = await this.computeSha256(stagingOutput);
 
-      // 8. Atomic move staging → final outputPath
+      // 9. Atomic move staging → final outputPath
       await rename(stagingOutput, normalizedOutput);
+      await this.safeRemove(stagingSubPath);
 
       return {
         status: "OK",
@@ -322,6 +346,7 @@ export class FFmpegRenderer implements Renderer {
       };
     } catch (err: any) {
       await this.safeRemove(stagingOutput);
+      await this.safeRemove(stagingSubPath);
       return {
         status: "FAILED",
         reason: `Unexpected rendering error: ${err.message ?? err}`,
@@ -338,16 +363,32 @@ export class FFmpegRenderer implements Renderer {
     composition: FinalCompositionSpec,
     reportAssets: AssetIntegrityResult[],
     assetRoot: string,
-    outputPath: string
+    outputPath: string,
+    stagingSubPath?: string
   ): string[] {
     const canvas = composition.visualComposition.canvas;
     const shots = composition.visualComposition.shots;
-    const tracks = composition.narrationDialogueTracks;
+
+    // Collect all realized audio tracks: narration dialogue tracks + realized music & sfx cues
+    const audioTracks: Array<{ audioAssetId?: string; path: string; startSeconds: number; gainDb: number }> = [
+      ...composition.narrationDialogueTracks.map(t => ({ audioAssetId: t.audioAssetId, path: t.path, startSeconds: t.startSeconds, gainDb: t.gainDb })),
+      ...(composition.musicCues ?? []).filter(c => c.path).map(c => ({ audioAssetId: c.audioAssetId, path: c.path!, startSeconds: c.startSeconds, gainDb: c.gainDb })),
+      ...(composition.sfxCues ?? []).filter(c => c.path).map(c => ({ audioAssetId: c.audioAssetId, path: c.path!, startSeconds: c.startSeconds, gainDb: c.gainDb })),
+    ];
 
     const args: string[] = ["-y"]; // Overwrite staging file if it exists
 
     // Inputs: Visual assets (use exact resolvedPath from integrity report)
-    for (const shot of shots) {
+    for (let i = 0; i < shots.length; i++) {
+      const shot = shots[i];
+      const nextShot = i + 1 < shots.length ? shots[i + 1] : undefined;
+      const crossfadeDuration = (nextShot?.transitionIn?.type === "CROSSFADE" && nextShot.transitionIn.durationSeconds > 0)
+        ? nextShot.transitionIn.durationSeconds
+        : 0;
+
+      // Extend shot input duration by crossfade overlap if next shot crossfades
+      const shotRenderDuration = shot.timing.durationSeconds + crossfadeDuration;
+
       const matched = reportAssets.find(
         (a) =>
           a.kind === "visual" &&
@@ -358,13 +399,13 @@ export class FFmpegRenderer implements Renderer {
       const resolvedVisual = matched?.resolvedPath
         ? matched.resolvedPath
         : resolve(assetRoot, shot.visualAsset.path.replace(/^\//, ""));
-      args.push("-loop", "1", "-t", String(shot.timing.durationSeconds), "-i", resolvedVisual);
+      args.push("-loop", "1", "-t", String(shotRenderDuration), "-i", resolvedVisual);
     }
 
     // Inputs: Audio assets (use exact resolvedPath from integrity report)
-    for (const track of tracks) {
+    for (const track of audioTracks) {
       const matched = reportAssets.find(
-        (a) => a.kind === "audio" && a.assetId === track.audioAssetId && a.status === "OK"
+        (a) => a.kind === "audio" && (track.audioAssetId ? a.assetId === track.audioAssetId : a.path === track.path) && a.status === "OK"
       );
       const resolvedAudio = matched?.resolvedPath
         ? matched.resolvedPath
@@ -374,49 +415,118 @@ export class FFmpegRenderer implements Renderer {
 
     // Build filter_complex
     const filterParts: string[] = [];
-    const videoStreams: string[] = [];
+    const videoStreamTags: string[] = [];
 
+    // 1. Visual Filters: Camera motion (zoom/pan) per shot
     for (let i = 0; i < shots.length; i++) {
-      const vTag = `v${i}`;
-      filterParts.push(
-        `[${i}:v]scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,` +
-        `pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2,` +
-        `setsar=1,fps=${canvas.frameRate}[${vTag}]`
-      );
-      videoStreams.push(`[${vTag}]`);
-    }
+      const shot = shots[i];
+      const nextShot = i + 1 < shots.length ? shots[i + 1] : undefined;
+      const crossfadeDuration = (nextShot?.transitionIn?.type === "CROSSFADE" && nextShot.transitionIn.durationSeconds > 0)
+        ? nextShot.transitionIn.durationSeconds
+        : 0;
+      const shotRenderDuration = shot.timing.durationSeconds + crossfadeDuration;
+      const totalFrames = Math.max(1, Math.round(shotRenderDuration * canvas.frameRate));
 
-    // Concat video streams if multiple shots
-    let finalVideoTag = "[v0]";
-    if (shots.length > 1) {
-      const concatFilter = `${videoStreams.join("")}concat=n=${shots.length}:v=1:a=0[vconcat]`;
-      filterParts.push(concatFilter);
-      finalVideoTag = "[vconcat]";
-    }
+      const vTag = `v_cam_${i}`;
+      const k0 = shot.camera.keyframes[0] ?? { offset: 0, scale: 1, x: 0.5, y: 0.5 };
+      const k1 = shot.camera.keyframes[1] ?? { offset: 1, scale: 1, x: 0.5, y: 0.5 };
 
-    // Audio stream mixing/concat
-    let hasAudio = false;
-    let finalAudioTag = "";
-    if (tracks.length > 0) {
-      hasAudio = true;
-      const audioStreams: string[] = [];
-      for (let i = 0; i < tracks.length; i++) {
-        const audioInputIndex = shots.length + i;
-        const aTag = `a${i}`;
-        const delayMs = Math.round(tracks[i].startSeconds * 1000);
-        if (delayMs > 0) {
-          filterParts.push(`[${audioInputIndex}:a]adelay=${delayMs}|${delayMs}[${aTag}]`);
+      const isStatic = k0.scale === k1.scale && k0.x === k1.x && k0.y === k1.y;
+
+      let cameraFilter: string;
+      if (isStatic) {
+        if (k0.scale === 1 && k0.x === 0.5 && k0.y === 0.5) {
+          cameraFilter = `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,` +
+            `pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${canvas.frameRate}`;
         } else {
-          filterParts.push(`[${audioInputIndex}:a]anull[${aTag}]`);
+          cameraFilter = `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,` +
+            `pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,` +
+            `zoompan=z='${k0.scale}':x='(iw-iw/zoom)*${k0.x}':y='(ih-ih/zoom)*${k0.y}':d=${totalFrames}:s=${canvas.width}x${canvas.height}:fps=${canvas.frameRate},setsar=1`;
         }
-        audioStreams.push(`[${aTag}]`);
+      } else {
+        const denom = Math.max(1, totalFrames - 1);
+        const scaleDiff = parseFloat((k1.scale - k0.scale).toFixed(6));
+        const xDiff = parseFloat((k1.x - k0.x).toFixed(6));
+        const yDiff = parseFloat((k1.y - k0.y).toFixed(6));
+
+        const zExpr = `${k0.scale}+(${scaleDiff})*(on-1)/${denom}`;
+        const xExpr = `(iw-iw/zoom)*(${k0.x}+(${xDiff})*(on-1)/${denom})`;
+        const yExpr = `(ih-ih/zoom)*(${k0.y}+(${yDiff})*(on-1)/${denom})`;
+
+        cameraFilter = `scale=${canvas.width}:${canvas.height}:force_original_aspect_ratio=decrease,` +
+          `pad=${canvas.width}:${canvas.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,` +
+          `zoompan=z='${zExpr}':x='${xExpr}':y='${yExpr}':d=${totalFrames}:s=${canvas.width}x${canvas.height}:fps=${canvas.frameRate},setsar=1`;
       }
 
-      if (tracks.length > 1) {
-        filterParts.push(`${audioStreams.join("")}amix=inputs=${tracks.length}:duration=longest[amixout]`);
+      filterParts.push(`[${i}:v]${cameraFilter}[${vTag}]`);
+      videoStreamTags.push(`[${vTag}]`);
+    }
+
+    // 2. Shot Sequencing & Transitions (chaining CUTs and CROSSFADEs)
+    let currentAccTag = videoStreamTags[0];
+    let currentAccDuration = shots[0].timing.durationSeconds;
+
+    for (let i = 1; i < shots.length; i++) {
+      const shot = shots[i];
+      const nextAccTag = `[v_seq_${i}]`;
+      const transitionIn = shot.transitionIn;
+      const crossfadeDur = (transitionIn?.type === "CROSSFADE" && transitionIn.durationSeconds > 0)
+        ? transitionIn.durationSeconds
+        : 0;
+
+      if (crossfadeDur > 0) {
+        const offset = Math.max(0, currentAccDuration - crossfadeDur);
+        filterParts.push(
+          `${currentAccTag}${videoStreamTags[i]}xfade=transition=fade:duration=${crossfadeDur}:offset=${offset}${nextAccTag}`
+        );
+      } else {
+        filterParts.push(
+          `${currentAccTag}${videoStreamTags[i]}concat=n=2:v=1:a=0${nextAccTag}`
+        );
+      }
+
+      currentAccTag = nextAccTag;
+      currentAccDuration += shot.timing.durationSeconds;
+    }
+
+    // 3. Captions Subtitle Burn-In Filter
+    let finalVideoTag = currentAccTag;
+    if (stagingSubPath) {
+      const escapedSubPath = stagingSubPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+      const subTag = "[v_subtitles]";
+      filterParts.push(
+        `${currentAccTag}subtitles='${escapedSubPath}':force_style='FontSize=20,PrimaryColour=&H00FFFFFF,BackColour=&H80000000,BorderStyle=4,Alignment=2'${subTag}`
+      );
+      finalVideoTag = subTag;
+    }
+
+    // 4. Audio Stream Mixing (Narration + Music + SFX with gainDb & timing)
+    let hasAudio = false;
+    let finalAudioTag = "";
+    if (audioTracks.length > 0) {
+      hasAudio = true;
+      const audioStreams: string[] = [];
+      for (let i = 0; i < audioTracks.length; i++) {
+        const track = audioTracks[i];
+        const audioInputIndex = shots.length + i;
+        const aTag = `[a_mix_${i}]`;
+        const delayMs = Math.round(track.startSeconds * 1000);
+
+        const volumeFilter = track.gainDb !== 0 ? `,volume=${track.gainDb}dB` : "";
+        const delayFilter = delayMs > 0 ? `,adelay=${delayMs}|${delayMs}` : "";
+
+        filterParts.push(`[${audioInputIndex}:a]anull${volumeFilter}${delayFilter}${aTag}`);
+        audioStreams.push(aTag);
+      }
+
+      if (audioStreams.length > 1) {
+        filterParts.push(
+          `${audioStreams.join("")}amix=inputs=${audioStreams.length}:duration=longest:normalize=0,atrim=0:${composition.durationSeconds}[amixout]`
+        );
         finalAudioTag = "[amixout]";
       } else {
-        finalAudioTag = audioStreams[0];
+        filterParts.push(`${audioStreams[0]}atrim=0:${composition.durationSeconds},apad[aout_single]`);
+        finalAudioTag = "[aout_single]";
       }
     }
 
@@ -438,6 +548,27 @@ export class FFmpegRenderer implements Renderer {
     return args;
   }
 
+  private generateWebVTT(captions: FinalCompositionSpec["captions"]): string {
+    const lines: string[] = ["WEBVTT", ""];
+    captions.forEach((cap, idx) => {
+      lines.push(String(idx + 1));
+      lines.push(`${this.formatVTTTime(cap.startSeconds)} --> ${this.formatVTTTime(cap.endSeconds)}`);
+      const speakerPrefix = cap.speaker ? `${cap.speaker}: ` : "";
+      lines.push(`${speakerPrefix}${cap.text}`);
+      lines.push("");
+    });
+    return lines.join("\n");
+  }
+
+  private formatVTTTime(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 1000);
+    const pad = (n: number, z = 2) => String(n).padStart(z, "0");
+    return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(ms, 3)}`;
+  }
+
   private async computeSha256(filePath: string): Promise<string> {
     const hash = createHash("sha256");
     const stream = createReadStream(filePath);
@@ -447,7 +578,8 @@ export class FFmpegRenderer implements Renderer {
     return hash.digest("hex");
   }
 
-  private async safeRemove(filePath: string): Promise<void> {
+  private async safeRemove(filePath?: string): Promise<void> {
+    if (!filePath) return;
     try {
       await rm(filePath, { force: true });
     } catch {
@@ -455,3 +587,4 @@ export class FFmpegRenderer implements Renderer {
     }
   }
 }
+

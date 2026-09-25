@@ -78,6 +78,28 @@ export async function verifyAssetIntegrity(
     results.push(result);
   }
 
+  for (const cue of composition.musicCues ?? []) {
+    if (cue.audioAssetId && cue.path && cue.format) {
+      const result = await checkAudioAsset(
+        { audioAssetId: cue.audioAssetId, path: cue.path, format: cue.format, durationSeconds: cue.durationSeconds ?? (cue.endSeconds - cue.startSeconds) },
+        audioAssetById,
+        normalizedRoot
+      );
+      results.push(result);
+    }
+  }
+
+  for (const cue of composition.sfxCues ?? []) {
+    if (cue.audioAssetId && cue.path && cue.format) {
+      const result = await checkAudioAsset(
+        { audioAssetId: cue.audioAssetId, path: cue.path, format: cue.format, durationSeconds: cue.durationSeconds ?? (cue.endSeconds - cue.startSeconds) },
+        audioAssetById,
+        normalizedRoot
+      );
+      results.push(result);
+    }
+  }
+
   const failures = results.filter(r => r.status !== "OK");
 
   return {

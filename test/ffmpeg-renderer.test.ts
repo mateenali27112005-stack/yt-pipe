@@ -763,3 +763,238 @@ test("27. Missing audio stream when narration exists returns RenderFailure", asy
     env.cleanup();
   }
 });
+
+test("28. Camera keyframe dynamic zoompan filter construction", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "OK");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("zoompan=z="), "FFmpeg filter_complex must contain zoompan for keyframe motion");
+    assert.ok(filterArg.includes("1+(0.08)*(on-1)"), "FFmpeg filter_complex must interpolate zoom scale from 1 to 1.08");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("29. Shot sequencing with CROSSFADE transition filter construction", async () => {
+  const env = makeEnv();
+  try {
+    const multiShotComp: FinalCompositionSpec = {
+      ...COMPOSITION,
+      durationSeconds: 6,
+      visualComposition: {
+        canvas: { width: 1920, height: 1080, frameRate: 24 },
+        shots: [
+          COMPOSITION.visualComposition.shots[0],
+          {
+            id: "MCP_SH_002",
+            sceneId: "SC_002",
+            shotId: "SH_002",
+            visualAsset: {
+              assetId: "VAS_1",
+              assetVersionId: "VAS_1_v1",
+              path: "assets/shot1.png",
+              sha256: "a".repeat(64),
+            },
+            timing: { startSeconds: 3, endSeconds: 6, durationSeconds: 3 },
+            camera: { intent: "static", keyframes: [{ offset: 0, scale: 1, x: 0.5, y: 0.5 }, { offset: 1, scale: 1, x: 0.5, y: 0.5 }] },
+            transitionIn: { type: "CROSSFADE", atSeconds: 3, durationSeconds: 0.35 },
+            sourceHash: "c".repeat(64),
+          },
+        ],
+      },
+    };
+
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner({ durationSeconds: 6.0 }),
+    });
+
+    const result = await renderer.render(multiShotComp, env.context);
+    assert.equal(result.status, "OK");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("xfade=transition=fade:duration=0.35:offset=2.65"), "FFmpeg filter_complex must contain xfade filter with offset 2.65");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("30. Narration Dialogue Tracks audio gainDb and timing delay filter construction", async () => {
+  const env = makeEnv();
+  try {
+    const audioGainComp: FinalCompositionSpec = {
+      ...COMPOSITION,
+      narrationDialogueTracks: [
+        {
+          ...COMPOSITION.narrationDialogueTracks[0],
+          startSeconds: 1.5,
+          gainDb: -6.0,
+        },
+      ],
+    };
+
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(audioGainComp, env.context);
+    assert.equal(result.status, "OK");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("volume=-6dB"), "FFmpeg filter_complex must apply volume=-6dB gain");
+    assert.ok(filterArg.includes("adelay=1500|1500"), "FFmpeg filter_complex must apply 1500ms audio delay");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("31. Realized Music and SFX cues audio mixing filter construction", async () => {
+  const env = makeEnv();
+  try {
+    const musicSfxComp: FinalCompositionSpec = {
+      ...COMPOSITION,
+      musicCues: [
+        {
+          id: "MUS_001",
+          lifecycle: "GENERATED",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 0,
+          endSeconds: 3,
+          style: "cinematic",
+          gainDb: -18,
+        },
+      ],
+    };
+
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(musicSfxComp, env.context);
+    assert.equal(result.status, "OK");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("volume=-18dB"), "FFmpeg filter_complex must include music volume=-18dB filter");
+    assert.ok(filterArg.includes("amix=inputs=2"), "FFmpeg filter_complex must mix narration and music inputs with amix");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("32. Caption Subtitle Burn-In WebVTT generation and filter construction", async () => {
+  const env = makeEnv();
+  try {
+    let capturedArgs: string[] = [];
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedArgs = args;
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "OK");
+    const filterArg = capturedArgs[capturedArgs.indexOf("-filter_complex") + 1];
+    assert.ok(filterArg.includes("subtitles='"), "FFmpeg filter_complex must contain subtitles burn-in filter");
+    assert.ok(filterArg.includes(".vtt"), "FFmpeg subtitles filter must target staging .vtt file");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("33. Staging WebVTT subtitle file is cleaned up after render", async () => {
+  const env = makeEnv();
+  try {
+    let capturedVttPath = "";
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        const filterArg = args[args.indexOf("-filter_complex") + 1];
+        const match = filterArg.match(/subtitles='([^']+)'/);
+        if (match) capturedVttPath = match[1];
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "OK");
+    assert.ok(capturedVttPath.length > 0, "Subtitle path should be captured");
+    assert.equal(existsSync(capturedVttPath), false, "Staging .vtt file must be cleaned up after render completes");
+  } finally {
+    env.cleanup();
+  }
+});
+
