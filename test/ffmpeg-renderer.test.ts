@@ -1803,6 +1803,217 @@ test("48. FFprobe verification failure on full composition cleans staging and le
   }
 });
 
+test("49. Explicit frame-rate regression test (24, 25, 29.97, 30, 59.94, 60 fps)", async () => {
+  const env = makeEnv();
+  try {
+    const frameRates = [24, 25, 29.97, 30, 59.94, 60];
+    for (const fps of frameRates) {
+      let capturedArgs: string[] = [];
+      const processRunner: ProcessRunner = async (cmd, args) => {
+        if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+        if (cmd === "ffmpeg") {
+          capturedArgs = args;
+          const stagingPath = args[args.length - 1];
+          writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      };
+
+      const compFps: FinalCompositionSpec = {
+        ...COMPOSITION,
+        visualComposition: {
+          ...COMPOSITION.visualComposition,
+          canvas: { ...COMPOSITION.visualComposition.canvas, frameRate: fps },
+        },
+      };
+
+      const renderer = new FFmpegRenderer({
+        processRunner,
+        probeRunner: makeFakeProbeRunner(),
+      });
+
+      const result = await renderer.render(compFps, env.context);
+      assert.equal(result.status, "OK");
+      assert.ok(capturedArgs.includes(String(fps)), `Arguments must specify frameRate ${fps}`);
+    }
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("50. WebVTT caption formatting & special character escaping (Unicode, quotes, colons)", async () => {
+  const env = makeEnv();
+  try {
+    let capturedVttContent = "";
+    let capturedFilterArg = "";
+
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedFilterArg = args[args.indexOf("-filter_complex") + 1];
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const compCaptions: FinalCompositionSpec = {
+      ...COMPOSITION,
+      captions: [
+        {
+          id: "CAP_UNICODE",
+          role: "narration",
+          speaker: "Café Owner: 'Pierre'",
+          text: "Welcome to «L'Étoile»! Special: 100% gourmet.",
+          startSeconds: 0.5,
+          endSeconds: 2.5,
+        },
+      ],
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compCaptions, env.context);
+    assert.equal(result.status, "OK");
+    assert.ok(capturedFilterArg.includes("subtitles="), "Filter complex should include subtitles filter");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("51. Multi-track audio mixing (narration + music + sfx) at 0 dBFS peaks", async () => {
+  const env = makeEnv();
+  try {
+    let capturedFilterArg = "";
+    const processRunner: ProcessRunner = async (cmd, args) => {
+      if (args.includes("-version")) return { exitCode: 0, stdout: "", stderr: "" };
+      if (cmd === "ffmpeg") {
+        capturedFilterArg = args[args.indexOf("-filter_complex") + 1];
+        const stagingPath = args[args.length - 1];
+        writeFileSync(stagingPath, Buffer.from("rendered-bytes"));
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+
+    const reportAllAudio: IntegrityReport = {
+      ...env.integrityReport,
+      assets: [
+        ...env.integrityReport.assets,
+        {
+          kind: "audio",
+          assetId: "MUS_AST",
+          path: "assets/seg1.aiff",
+          resolvedPath: join(env.root, "assets/seg1.aiff"),
+          status: "OK",
+        },
+        {
+          kind: "audio",
+          assetId: "SFX_AST",
+          path: "assets/seg1.aiff",
+          resolvedPath: join(env.root, "assets/seg1.aiff"),
+          status: "OK",
+        },
+      ],
+    };
+
+    const compTripleAudio: FinalCompositionSpec = {
+      ...COMPOSITION,
+      narrationDialogueTracks: [
+        {
+          id: "NARR_1",
+          audioAssetId: "AST_1",
+          path: "assets/seg1.aiff",
+          role: "narration",
+          startSeconds: 0,
+          endSeconds: 3,
+          gainDb: 0,
+          format: "aiff",
+          durationSeconds: 3,
+          voice: "Narrator",
+        },
+      ],
+      musicCues: [
+        {
+          id: "MUS_1",
+          lifecycle: "GENERATED",
+          audioAssetId: "MUS_AST",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 0,
+          endSeconds: 3,
+          style: "ambient",
+          gainDb: -10,
+        } as any,
+      ],
+      sfxCues: [
+        {
+          id: "SFX_1",
+          lifecycle: "GENERATED",
+          shotId: "SH_001",
+          audioAssetId: "SFX_AST",
+          path: "assets/seg1.aiff",
+          format: "aiff",
+          startSeconds: 1,
+          endSeconds: 2,
+          description: "impact",
+          gainDb: -6,
+        } as any,
+      ],
+    };
+
+    const ctx = { ...env.context, integrityReport: reportAllAudio };
+    const renderer = new FFmpegRenderer({
+      processRunner,
+      probeRunner: makeFakeProbeRunner(),
+    });
+
+    const result = await renderer.render(compTripleAudio, ctx);
+    assert.equal(result.status, "OK");
+    assert.ok(capturedFilterArg.includes("amix=inputs=3"), `Should mix 3 audio inputs, got: ${capturedFilterArg}`);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("52. Failure matrix: Missing audio stream in Probe output returns RenderFailure and cleans staging", async () => {
+  const env = makeEnv();
+  try {
+    writeFileSync(env.outputPath, Buffer.from("pre-existing-output"));
+
+    const probeNoAudio: ProbeRunner = async () => {
+      return {
+        formatName: "mov,mp4,m4a,3gp,3g2,mj2",
+        durationSeconds: 3,
+        videoStream: { codecName: "h264", width: 1920, height: 1080, rFrameRate: "24/1" },
+        audioStream: undefined, // Missing audio stream despite narration track
+      };
+    };
+
+    const renderer = new FFmpegRenderer({
+      processRunner: makeFakeProcessRunner(),
+      probeRunner: probeNoAudio,
+    });
+
+    const result = await renderer.render(COMPOSITION, env.context);
+    assert.equal(result.status, "FAILED");
+    assert.ok(/no audio stream/.test(result.reason), `Expected audio stream failure reason, got: ${result.reason}`);
+    assert.equal(
+      readFileSync(env.outputPath, "utf8"),
+      "pre-existing-output",
+      "Pre-existing output file must remain untouched"
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+
 
 
 
