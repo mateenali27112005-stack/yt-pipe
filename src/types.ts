@@ -284,6 +284,8 @@ export interface FinalCompositionSpec {
   sourceSpecVersion: number;
   sourceTimelineVersion: number;
   sourceMotionPlanVersion: number;
+  sourceVisualSpecVersion: number;
+  sourceSeriesBibleVersion?: number;
   sourceAssetManifestRevision: number;
   generatedAt: string;
   durationSeconds: number;
@@ -291,7 +293,7 @@ export interface FinalCompositionSpec {
     canvas: MotionCompositionPlan["canvas"];
     shots: MotionCompositionPlan["shots"];
   };
-  narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number; format: string; durationSeconds: number; sha256: string; voice: string }>;
+  narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number; format: string; durationSeconds: number; voice: string }>;
   musicCues: Array<{ id: string; lifecycle: "PLANNED"; startSeconds: number; endSeconds: number; style: string; gainDb: number }>;
   sfxCues: Array<{ id: string; lifecycle: "PLANNED"; shotId: string; startSeconds: number; endSeconds: number; description: string; gainDb: number }>;
   captions: Array<{ id: string; role: "narration" | "dialogue"; speaker?: string; text: string; startSeconds: number; endSeconds: number }>;

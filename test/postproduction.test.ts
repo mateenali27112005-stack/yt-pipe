@@ -62,6 +62,7 @@ test("rejects malformed, duplicate, and out-of-contract motion composition shots
   const invalidTiming = structuredClone(motion); invalidTiming.shots[0].timing = { startSeconds: 0, endSeconds: 4, durationSeconds: 4 };
   assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidTiming), /does not match the RealizedTimeline timing/);
   const duplicate = structuredClone(motion); duplicate.shots.push(structuredClone(duplicate.shots[0]));
+  duplicate.shots[1].id = "MCP_SH_001_002"; // bypass duplicate record ID check
   assert.throws(() => createFinalCompositionSpec(timeline, audio, duplicate), /duplicate shot/);
   const invalidCamera = structuredClone(motion); invalidCamera.shots[0].camera.keyframes[1].offset = 0;
   assert.throws(() => createFinalCompositionSpec(timeline, audio, invalidCamera), /invalid visual composition shot/);
@@ -220,4 +221,47 @@ test("postproduction CLI rejects unknown flags and missing values", () => {
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+
+test("rejects empty timeline", () => {
+  const empty = structuredClone(timeline);
+  empty.segments = [];
+  assert.throws(() => createFinalCompositionSpec(empty, audio, motion), /at least one segment/);
+});
+
+test("rejects audio asset duration mismatch with timeline segment duration", () => {
+  const mismatch = structuredClone(audio);
+  mismatch.assets[0].durationSeconds = 7;
+  assert.throws(() => createFinalCompositionSpec(timeline, mismatch, motion), /duration must match/);
+});
+
+test("rejects duplicate motion record IDs", () => {
+  const duplicate = structuredClone(motion);
+  const shot2 = structuredClone(duplicate.shots[0]);
+  shot2.shotId = "SH_001_002"; // different shotId
+  shot2.timing = { startSeconds: 3, endSeconds: 5, durationSeconds: 2 }; // valid timing so it doesn't fail early
+  // same id though: MCP_SH_001_001
+  
+  // Create a timeline that has this second shot so it passes the timing check
+  const myTimeline = structuredClone(timeline);
+  myTimeline.segments.push({ id: "SEG_3", shotId: "SH_001_002", role: "narration", text: "Test", startSeconds: 3, endSeconds: 5, durationSeconds: 2, audioAssetId: "AST_3" });
+  myTimeline.totalDurationSeconds = 5;
+  
+  const myAudio = structuredClone(audio);
+  myAudio.assets.push({ id: "AST_3", segmentId: "SEG_3", shotId: "SH_001_002", role: "narration", voice: "Narrator", path: "assets/3.aiff", format: "aiff", durationSeconds: 2 });
+  
+  duplicate.shots.push(shot2);
+  
+  assert.throws(() => createFinalCompositionSpec(myTimeline, myAudio, duplicate), /duplicate record/);
+});
+
+test("preserves visual-spec and SeriesBible provenance", () => {
+  const spec = createFinalCompositionSpec(timeline, audio, motion);
+  assert.equal(spec.sourceVisualSpecVersion, 1);
+  
+  const motionWithBible = structuredClone(motion);
+  motionWithBible.sourceSeriesBibleVersion = 2;
+  const specWithBible = createFinalCompositionSpec(timeline, audio, motionWithBible);
+  assert.equal(specWithBible.sourceSeriesBibleVersion, 2);
 });

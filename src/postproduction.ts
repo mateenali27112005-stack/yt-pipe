@@ -12,18 +12,19 @@ export function createFinalCompositionSpec(timeline: RealizedTimeline, audio: Au
   const assets = new Map(audio.assets.map(asset => [asset.id, asset]));
   const narrationDialogueTracks = timeline.segments.map(segment => {
     const asset = assets.get(segment.audioAssetId)!;
-    return { id: `MIX_${segment.id}`, audioAssetId: asset.id, path: asset.path, role: segment.role, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds, gainDb: 0, format: asset.format, durationSeconds: asset.durationSeconds, voice: asset.voice, sha256: (asset as any).sha256 ?? "0".repeat(64) };
+    return { id: `MIX_${segment.id}`, audioAssetId: asset.id, path: asset.path, role: segment.role, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds, gainDb: 0, format: asset.format, durationSeconds: asset.durationSeconds, voice: asset.voice };
   });
   const captions = timeline.segments.map(segment => ({ id: `CAP_${segment.id}`, role: segment.role, ...(segment.speaker ? { speaker: segment.speaker } : {}), text: segment.text, startSeconds: segment.startSeconds, endSeconds: segment.endSeconds }));
   const musicCues = durationSeconds > 0 ? [{ id: `MUS_${timeline.episodeId}`, lifecycle: "PLANNED" as const, startSeconds: 0, endSeconds: durationSeconds, style: options.musicStyle ?? "cinematic instrumental underscore", gainDb: -18 }] : [];
   const sfxCues = motion.shots.flatMap(shot => inferSfx(shot.shotId, shot.timing.startSeconds, shot.timing.endSeconds, shot.camera.intent));
   const source = { timelineVersion: timeline.timelineVersion, audioAssets: narrationDialogueTracks, visualComposition, motionPlanVersion: motion.motionPlanVersion, motionManifestRevision: motion.sourceAssetManifestRevision, musicCues, sfxCues, captions };
-  return { schemaVersion: "0.1", compositionVersion, episodeId: timeline.episodeId, sourceSpecVersion: timeline.sourceSpecVersion, sourceTimelineVersion: timeline.timelineVersion, sourceMotionPlanVersion: motion.motionPlanVersion, sourceAssetManifestRevision: motion.sourceAssetManifestRevision, generatedAt: (options.generatedAt ?? new Date()).toISOString(), durationSeconds, visualComposition, narrationDialogueTracks, musicCues, sfxCues, captions, sourceHash: hash(source) };
+  return { schemaVersion: "0.1", compositionVersion, episodeId: timeline.episodeId, sourceSpecVersion: timeline.sourceSpecVersion, sourceTimelineVersion: timeline.timelineVersion, sourceMotionPlanVersion: motion.motionPlanVersion, sourceVisualSpecVersion: motion.sourceVisualSpecVersion, ...(motion.sourceSeriesBibleVersion !== undefined ? { sourceSeriesBibleVersion: motion.sourceSeriesBibleVersion } : {}), sourceAssetManifestRevision: motion.sourceAssetManifestRevision, generatedAt: (options.generatedAt ?? new Date()).toISOString(), durationSeconds, visualComposition, narrationDialogueTracks, musicCues, sfxCues, captions, sourceHash: hash(source) };
 }
 
 export function assertPostproductionInputs(timeline: unknown, audio: unknown, motion: unknown): asserts timeline is RealizedTimeline {
   if (!timeline || typeof timeline !== "object") throw new Error("Postproduction requires a RealizedTimeline JSON object.");
   const realized = timeline as Partial<RealizedTimeline>;
+  if (!Array.isArray(realized.segments) || realized.segments.length === 0) throw new Error("Timeline must contain at least one segment.");
   if (realized.schemaVersion !== "0.1" || !positiveInteger(realized.timelineVersion) || !positiveInteger(realized.sourceSpecVersion) || !nonEmpty(realized.episodeId) || !finitePositive(realized.totalDurationSeconds) || !Array.isArray(realized.segments)) throw new Error("RealizedTimeline is missing required postproduction fields.");
   if (!audio || typeof audio !== "object") throw new Error("Postproduction requires an AudioAssetManifest JSON object.");
   const audioManifest = audio as Partial<AudioAssetManifest>;
@@ -85,10 +86,13 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
     timingByShot.set(segment.shotId, { startSeconds, endSeconds, durationSeconds: endSeconds - startSeconds });
   }
   const motionShotIds = new Set<string>();
+  const motionShotRecordIds = new Set<string>();
   let previousStart = -1;
   for (const shot of motionPlan.shots) {
     if (!validMotionShot(shot)) throw new Error("MotionCompositionPlan contains an invalid visual composition shot.");
+    if (motionShotRecordIds.has(shot.id)) throw new Error(`MotionCompositionPlan contains duplicate record '${shot.id}'.`);
     if (motionShotIds.has(shot.shotId)) throw new Error(`MotionCompositionPlan contains duplicate shot '${shot.shotId}'.`);
+    motionShotRecordIds.add(shot.id);
     const timelineTiming = timingByShot.get(shot.shotId);
     if (!timelineTiming || !sameTiming(shot.timing, timelineTiming)) throw new Error(`MotionCompositionPlan shot '${shot.shotId}' does not match the RealizedTimeline timing.`);
     if (shot.timing.startSeconds < previousStart) throw new Error("MotionCompositionPlan shots are not in realized timeline order.");
@@ -98,6 +102,7 @@ export function assertPostproductionInputs(timeline: unknown, audio: unknown, mo
   for (const segment of realized.segments) {
     const asset = audioById.get(segment.audioAssetId);
     if (!segment || !validAudioAsset(asset, segment) || !validTiming(segment.startSeconds, segment.endSeconds, segment.durationSeconds)) throw new Error("RealizedTimeline contains an unresolved audio segment.");
+    if (Math.abs(asset!.durationSeconds - segment.durationSeconds) >= 0.0001) throw new Error("Audio asset duration must match timeline segment duration.");
     if (!motionShotIds.has(segment.shotId)) throw new Error(`MotionCompositionPlan does not contain shot '${segment.shotId}'.`);
   }
 }
