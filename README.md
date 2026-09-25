@@ -109,3 +109,11 @@ npm run motion-plan -- output/EP_001/audio/v1/realized_timeline.json output/EP_0
 ```
 
 Every planned shot requires a `GENERATED` active PNG asset. Camera intent resolves deterministically to keyframes, while same-scene boundaries use cuts and scene changes use bounded crossfades. The plan records the exact timeline, visual-spec, manifest, asset version, and optional Series Bible revision it consumes. Rendering remains a later milestone.
+
+## V0.7 Postproduction Composition
+
+V0.7 assembles the V0.2 audio manifest, realized timeline, and V0.6 motion plan into a renderer-ready `FinalCompositionSpec`. Narration and dialogue retain their measured asset timing; captions follow those segments; music and camera-driven SFX remain explicit planned cues. It does not synthesize music or SFX, mix audio, burn captions, or render media.
+
+```bash
+npm run postproduction-plan -- output/EP_001/audio/v1/realized_timeline.json output/EP_001/audio/v1/audio_manifest.json output/EP_001/motion/v1/motion_composition_plan.json output/EP_001/composition/v1
+```

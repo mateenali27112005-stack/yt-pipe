@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { createFinalCompositionSpec } from "../src/postproduction.ts";
+import type { AudioAssetManifest, MotionCompositionPlan, RealizedTimeline } from "../src/types.ts";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const timeline: RealizedTimeline = { schemaVersion: "0.1", timelineVersion: 1, episodeId: "EP_001", sourceSpecVersion: 1, generatedAt: "2026-09-25T00:00:00.000Z", totalDurationSeconds: 3, segments: [{ id: "SEG_1", shotId: "SH_001_001", role: "narration", text: "The symbol woke.", startSeconds: 0, endSeconds: 2, durationSeconds: 2, audioAssetId: "AST_1" }, { id: "SEG_2", shotId: "SH_001_001", role: "dialogue", speaker: "Kael", text: "What is this?", startSeconds: 2, endSeconds: 3, durationSeconds: 1, audioAssetId: "AST_2" }] };
+const audio: AudioAssetManifest = { schemaVersion: "0.1", episodeId: "EP_001", sourceSpecVersion: 1, generatedAt: "2026-09-25T00:00:00.000Z", provider: "macos-say", assets: [{ id: "AST_1", segmentId: "SEG_1", shotId: "SH_001_001", role: "narration", voice: "Narrator", path: "assets/1.aiff", format: "aiff", durationSeconds: 2 }, { id: "AST_2", segmentId: "SEG_2", shotId: "SH_001_001", role: "dialogue", voice: "Kael", path: "assets/2.aiff", format: "aiff", durationSeconds: 1 }] };
+const motion: MotionCompositionPlan = { schemaVersion: "0.1", motionPlanVersion: 1, episodeId: "EP_001", sourceSpecVersion: 1, sourceTimelineVersion: 1, sourceVisualSpecVersion: 1, sourceAssetManifestRevision: 2, generatedAt: "2026-09-25T00:00:00.000Z", canvas: { width: 1920, height: 1080, frameRate: 24 }, shots: [{ id: "MCP_SH_001_001", sceneId: "SC_001", shotId: "SH_001_001", visualAsset: { assetId: "VAS_SH_001_001", assetVersionId: "VAS_SH_001_001_v2", path: "assets/1.png", sha256: "a".repeat(64) }, timing: { startSeconds: 0, endSeconds: 3, durationSeconds: 3 }, camera: { intent: "slow push-in", keyframes: [{ offset: 0, scale: 1, x: .5, y: .5 }, { offset: 1, scale: 1.08, x: .5, y: .5 }] }, sourceHash: "b".repeat(64) }] };
+
+test("assembles deterministic narration, music, SFX, and captions on the realized timeline", () => {
+  const first = createFinalCompositionSpec(timeline, audio, motion, { generatedAt: new Date("2026-09-26T00:00:00.000Z") });
+  const second = createFinalCompositionSpec(timeline, audio, motion, { generatedAt: new Date("2026-09-26T00:00:00.000Z") });
+  assert.deepEqual(first, second);
+  assert.equal(first.durationSeconds, 3);
+  assert.deepEqual(first.narrationDialogueTracks.map(track => track.audioAssetId), ["AST_1", "AST_2"]);
+  assert.deepEqual(first.captions.map(caption => caption.text), ["The symbol woke.", "What is this?"]);
+  assert.equal(first.musicCues[0].lifecycle, "PLANNED");
+  assert.equal(first.sfxCues[0].description, "subtle cinematic motion swell");
+  assert.match(first.sourceHash, /^[a-f0-9]{64}$/);
+});
+
+test("rejects mismatched audio and incomplete motion coverage", () => {
+  const wrongAudio = structuredClone(audio); wrongAudio.assets[0].segmentId = "SEG_UNKNOWN";
+  assert.throws(() => createFinalCompositionSpec(timeline, wrongAudio, motion), /unresolved audio segment/);
+  const missingMotion = structuredClone(motion); missingMotion.shots = [];
+  assert.throws(() => createFinalCompositionSpec(timeline, audio, missingMotion), /does not contain shot/);
+});
+
+test("postproduction CLI publishes a protected final composition specification", () => {
+  const temp = mkdtempSync(join(tmpdir(), "postproduction-"));
+  try {
+    const paths = ["timeline.json", "audio.json", "motion.json"].map(name => join(temp, name));
+    [timeline, audio, motion].forEach((value, index) => writeFileSync(paths[index], JSON.stringify(value)));
+    const output = join(temp, "composition");
+    const args = ["--experimental-strip-types", "src/postproduction-cli.ts", ...paths, output];
+    const first = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /POSTPRODUCTION_PLAN_COMPLETE: 2 audio tracks, 2 captions/);
+    assert.equal(JSON.parse(readFileSync(join(output, "final_composition_spec.json"), "utf8")).compositionVersion, 1);
+    const second = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+    assert.equal(second.status, 2); assert.match(second.stderr, /Refusing to write into existing/);
+  } finally { rmSync(temp, { recursive: true, force: true }); }
+});

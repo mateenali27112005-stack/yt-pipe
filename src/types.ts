@@ -276,3 +276,20 @@ export interface MotionCompositionPlan {
     sourceHash: string;
   }>;
 }
+
+export interface FinalCompositionSpec {
+  schemaVersion: "0.1";
+  compositionVersion: number;
+  episodeId: string;
+  sourceSpecVersion: number;
+  sourceTimelineVersion: number;
+  sourceMotionPlanVersion: number;
+  sourceAssetManifestRevision: number;
+  generatedAt: string;
+  durationSeconds: number;
+  narrationDialogueTracks: Array<{ id: string; audioAssetId: string; path: string; role: "narration" | "dialogue"; startSeconds: number; endSeconds: number; gainDb: number }>;
+  musicCues: Array<{ id: string; lifecycle: "PLANNED"; startSeconds: number; endSeconds: number; style: string; gainDb: number }>;
+  sfxCues: Array<{ id: string; lifecycle: "PLANNED"; shotId: string; startSeconds: number; endSeconds: number; description: string; gainDb: number }>;
+  captions: Array<{ id: string; role: "narration" | "dialogue"; speaker?: string; text: string; startSeconds: number; endSeconds: number }>;
+  sourceHash: string;
+}
