@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { AudioAssetManifest, AudioVoiceRegistry, EpisodeSpec, RealizedTimeline } from "./types.ts";
 
@@ -14,12 +15,15 @@ export interface SpeechProvider {
 export interface AudioRunOptions {
   outputPath: string;
   voices: AudioVoiceRegistry;
+  timelineVersion?: number;
   provider?: SpeechProvider;
   generatedAt?: Date;
 }
 
 export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions): Promise<{ manifest: AudioAssetManifest; timeline: RealizedTimeline }> {
   assertValidatedEpisodeSpec(spec);
+  const timelineVersion = options.timelineVersion ?? 1;
+  if (!Number.isInteger(timelineVersion) || timelineVersion < 1) throw new Error("Timeline version must be a positive integer.");
   const provider = options.provider ?? macosSayProvider;
   const generatedAt = (options.generatedAt ?? new Date()).toISOString();
   const assets: AudioAssetManifest["assets"] = [];
@@ -39,7 +43,7 @@ export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions
         await provider.synthesize(input.text, input.voice, outputPath);
         const durationSeconds = await provider.measureDuration(outputPath);
         if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error(`Audio provider returned an invalid duration for ${segmentId}.`);
-        assets.push({ id: assetId, segmentId, shotId: shot.id, role: input.role, voice: input.voice, path: `assets/${filename}`, format: "aiff", durationSeconds });
+        assets.push({ id: assetId, segmentId, shotId: shot.id, role: input.role, voice: input.voice, path: `assets/${filename}`, format: "aiff", durationSeconds, sha256: createHash("sha256").update(await readFile(outputPath)).digest("hex") });
         segments.push({ id: segmentId, shotId: shot.id, role: input.role, ...(input.speaker ? { speaker: input.speaker } : {}), text: input.text, startSeconds: cursor, endSeconds: cursor + durationSeconds, durationSeconds, audioAssetId: assetId });
         cursor += durationSeconds;
       }
@@ -48,7 +52,7 @@ export async function createAudioRun(spec: EpisodeSpec, options: AudioRunOptions
   const base = { schemaVersion: "0.1" as const, episodeId: spec.episode.id, sourceSpecVersion: spec.specVersion, generatedAt };
   return {
     manifest: { ...base, provider: provider.name, assets },
-    timeline: { ...base, totalDurationSeconds: cursor, segments }
+    timeline: { ...base, timelineVersion, totalDurationSeconds: cursor, segments }
   };
 }
 
