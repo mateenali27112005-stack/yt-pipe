@@ -99,3 +99,13 @@ npm run visual-generate -- output/EP_001/visual/v1/shot_visual_spec.json output/
 ```
 
 Reference assets are versioned records with an optional active pointer. V0.5 passes active references to the provider boundary as resolved metadata; it does not yet add image-to-image generation, animation, rendering, or publishing.
+
+## V0.6 Motion and Compositing Contracts
+
+V0.6 consumes the realized audio timeline, a matching V0.5 visual specification, and generated active visual assets. It produces a deterministic `MotionCompositionPlan` with renderer-agnostic canvas settings, shot timing, camera keyframes, asset-version lineage, and transition intent. It does not render a video or invoke FFmpeg.
+
+```bash
+npm run motion-plan -- output/EP_001/audio/v1/realized_timeline.json output/EP_001/visual/v1/shot_visual_spec.json output/EP_001/visual/v1/asset_manifest.json output/EP_001/motion/v1 --motion-plan-version 1
+```
+
+Every planned shot requires a `GENERATED` active PNG asset. Camera intent resolves deterministically to keyframes, while same-scene boundaries use cuts and scene changes use bounded crossfades. The plan records the exact timeline, visual-spec, manifest, asset version, and optional Series Bible revision it consumes. Rendering remains a later milestone.
